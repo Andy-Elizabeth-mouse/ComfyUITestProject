@@ -1,0 +1,68 @@
+using UnrealBuildTool;
+
+public class ComfyUIIntegration : ModuleRules
+{
+    public ComfyUIIntegration(ReadOnlyTargetRules Target) : base(Target)
+    {
+        PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
+
+        PublicIncludePaths.AddRange(
+            new string[] {
+                // ... add public include paths required here ...
+            }
+        );
+
+        PrivateIncludePaths.AddRange(
+            new string[] {
+                // ... add other private include paths required here ...
+            }
+        );
+
+        PublicDependencyModuleNames.AddRange(
+            new string[]
+            {
+                "Core",
+                "CoreUObject",
+                "Engine",
+                "UnrealEd",
+                
+                "EditorWidgets",
+                "ToolMenus",
+                "Slate",
+                "SlateCore",
+                "HTTP",
+                "Json",
+                "JsonUtilities",
+                "ImageWrapper",
+                "AssetRegistry"
+            }
+        );
+
+        PrivateDependencyModuleNames.AddRange(
+            new string[]
+            {
+                "EditorSubsystem",
+                "ToolWidgets",
+                "PropertyEditor",
+                "LevelEditor",
+                "ContentBrowser",
+                "AssetTools",
+                "DeveloperSettings",
+                "Projects",
+                "EditorStyle",
+                "ApplicationCore",
+                "InputCore",
+                "RenderCore",
+                "RHI",
+                "DesktopPlatform"
+            }
+        );
+
+        DynamicallyLoadedModuleNames.AddRange(
+            new string[]
+            {
+                // ... add any modules that your module loads dynamically here ...
+            }
+        );
+    }
+}

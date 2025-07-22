@@ -1,0 +1,14 @@
+/.github
+/.vs
+/.vscode
+/Content
+/DerivedDataCache
+/Intermediate
+/Releases
+/Saved
+/Plugins/ComfyUIIntegration/.github
+/Plugins/ComfyUIIntegration/.vscode
+/Plugins/ComfyUIIntegration/Content
+/Plugins/ComfyUIIntegration/Documentation
+/Plugins/ComfyUIIntegration/Intermediate
+/Plugins/ComfyUIIntegration/Scripts

@@ -1,0 +1,66 @@
+# ----- Unreal Engine 5 Project .gitignore -----
+
+# Editor and IDE files
+.vscode/
+.vs/
+*.suo
+*.user
+*.userprefs
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+
+# OS generated files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Unreal Build artifacts
+/Binaries/
+/Build/
+/Intermediate/
+/DerivedDataCache/
+/Saved/
+
+# Project-specific generated folders
+/Plugins/*/Binaries/
+/Plugins/*/Build/
+/Plugins/*/Intermediate/
+
+# UHT (Unreal Header Tool) generated files
+*.generated.h
+
+# Visual Studio cache files
+*.log
+*.tlog
+*.lastbuildstate
+
+# Unreal project files
+# Uncomment if you want to ignore project files
+# *.uprojectdirs
+
+# PipInstall artifacts
+/PipInstall/
+
+# ReSharper
+_ReSharper*/
+
+# Rider
+.idea/
+*.sln.iml
+
+# CMake
+CMakeLists.txt.user
+
+# JetBrains Rider
+.idea/
+
+# Build tools
+*.xcodeproj
+*.xcworkspace
+
+# Other
+# Uncomment to ignore crash reports and dumps
+# Saved/Crashes/
+# Saved/DumpBacktraces.log

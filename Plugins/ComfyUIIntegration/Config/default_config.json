@@ -1,0 +1,82 @@
+{
+    "workflows": [
+        {
+            "name": "Basic Text-to-Image",
+            "type": "text_to_image",
+            "description": "Generate images from text descriptions using Stable Diffusion",
+            "parameters": {
+                "model": "v1-5-pruned-emaonly-fp16.safetensors",
+                "width": 512,
+                "height": 512,
+                "steps": 20,
+                "cfg_scale": 7.0,
+                "sampler": "euler",
+                "scheduler": "normal"
+            },
+            "template": "basic_txt2img.json"
+        },
+        {
+            "name": "High Quality Text-to-Image",
+            "type": "text_to_image",
+            "description": "Generate high quality images with enhanced settings",
+            "parameters": {
+                "model": "realisticVisionV60_v60B1VAE.safetensors",
+                "width": 768,
+                "height": 768,
+                "steps": 30,
+                "cfg_scale": 7.0,
+                "sampler": "dpmpp_2m",
+                "scheduler": "karras"
+            },
+            "template": "high_quality_txt2img.json"
+        },
+        {
+            "name": "Image-to-Image",
+            "type": "image_to_image",
+            "description": "Transform existing images based on text prompts",
+            "parameters": {
+                "model": "v1-5-pruned-emaonly-fp16.safetensors",
+                "strength": 0.75,
+                "steps": 20,
+                "cfg_scale": 7.0,
+                "sampler": "euler",
+                "scheduler": "normal"
+            },
+            "template": "img2img.json"
+        },
+        {
+            "name": "High-Resolution Upscale",
+            "type": "upscale",
+            "description": "Upscale images to higher resolution with AI enhancement",
+            "parameters": {
+                "upscale_model": "RealESRGAN_x4plus.pth",
+                "scale_factor": 4,
+                "face_enhance": true
+            },
+            "template": "upscale.json"
+        },
+        {
+            "name": "Style Transfer",
+            "type": "style_transfer",
+            "description": "Apply artistic styles to images",
+            "parameters": {
+                "style_model": "style_model.safetensors",
+                "style_strength": 0.8,
+                "content_strength": 0.6
+            },
+            "template": "style_transfer.json"
+        }
+    ],
+    "server_settings": {
+        "default_url": "http://127.0.0.1:8188",
+        "timeout": 300,
+        "max_retries": 3,
+        "poll_interval": 2.0
+    },
+    "ui_settings": {
+        "default_workflow": "Basic Text-to-Image",
+        "auto_save": true,
+        "preview_size": "medium",
+        "show_advanced_options": false
+    }
+}
