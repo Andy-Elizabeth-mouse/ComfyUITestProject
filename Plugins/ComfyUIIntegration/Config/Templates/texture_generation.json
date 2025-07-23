@@ -1,0 +1,47 @@
+{
+    "1": {
+        "inputs": {
+            "prompt": "{POSITIVE_PROMPT}",
+            "negative_prompt": "{NEGATIVE_PROMPT}",
+            "width": 1024,
+            "height": 1024,
+            "guidance_scale": 7.5,
+            "num_inference_steps": 30,
+            "seed": 42,
+            "texture_type": "diffuse"
+        },
+        "class_type": "TextureGeneratorNode"
+    },
+    "2": {
+        "inputs": {
+            "base_texture": ["1", 0],
+            "prompt": "{POSITIVE_PROMPT}",
+            "generate_normal": true,
+            "generate_roughness": true,
+            "generate_metallic": true,
+            "generate_ao": true
+        },
+        "class_type": "PBRTextureGenerator"
+    },
+    "3": {
+        "inputs": {
+            "diffuse": ["2", 0],
+            "normal": ["2", 1],
+            "roughness": ["2", 2],
+            "metallic": ["2", 3],
+            "ao": ["2", 4],
+            "seamless": true,
+            "tile_size": 1024
+        },
+        "class_type": "TexturePackager"
+    },
+    "4": {
+        "inputs": {
+            "texture_package": ["3", 0],
+            "format": "png",
+            "quality": 95,
+            "filename_prefix": "ComfyUI_Texture"
+        },
+        "class_type": "SaveTexture"
+    }
+}

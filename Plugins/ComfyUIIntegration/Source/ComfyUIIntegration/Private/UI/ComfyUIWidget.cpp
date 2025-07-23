@@ -2,6 +2,9 @@
 #include "UI/SImageDragDropWidget.h"
 #include "Client/ComfyUIClient.h"
 #include "Workflow/ComfyUIWorkflowConfig.h"
+#include "Workflow/ComfyUIWorkflowService.h"
+#include "Workflow/ComfyUIWorkflowManager.h"
+#include "Utils/ComfyUIFileManager.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Layout/SSeparator.h"
 #include "Widgets/Text/STextBlock.h"
@@ -40,20 +43,6 @@
 #include "UObject/SavePackage.h"
 #include "FileHelpers.h"
 
-// FSavePackageArgs结构前向声明
-// struct FSavePackageArgs
-// {
-//     EObjectFlags TopLevelFlags = RF_NoFlags;
-//     FOutputDevice* Error = nullptr;
-//     FLinkerNull* Conform = nullptr;
-//     bool bForceByteSwapping = false;
-//     bool bWarnOfLongFilename = false;
-//     uint32 SaveFlags = SAVE_None;
-//     // const class ITargetPlatform* TargetPlatform = nullptr;
-//     FDateTime FinalTimeStamp = FDateTime::MinValue();
-//     bool bSlowTask = true;
-// };
-
 #define LOCTEXT_NAMESPACE "ComfyUIWidget"
 
 void SComfyUIWidget::Construct(const FArguments& InArgs)
@@ -64,12 +53,12 @@ void SComfyUIWidget::Construct(const FArguments& InArgs)
     bIsGenerating = false;
     
     // 初始化工作流选项
-    WorkflowOptions.Add(MakeShareable(new EWorkflowType(EWorkflowType::TextToImage)));
-    WorkflowOptions.Add(MakeShareable(new EWorkflowType(EWorkflowType::ImageToImage)));
-    WorkflowOptions.Add(MakeShareable(new EWorkflowType(EWorkflowType::TextTo3D)));
-    WorkflowOptions.Add(MakeShareable(new EWorkflowType(EWorkflowType::ImageTo3D)));
-    WorkflowOptions.Add(MakeShareable(new EWorkflowType(EWorkflowType::TextureGeneration)));
-    WorkflowOptions.Add(MakeShareable(new EWorkflowType(EWorkflowType::Custom)));
+    WorkflowOptions.Add(MakeShareable(new EComfyUIWorkflowType(EComfyUIWorkflowType::TextToImage)));
+    WorkflowOptions.Add(MakeShareable(new EComfyUIWorkflowType(EComfyUIWorkflowType::ImageToImage)));
+    WorkflowOptions.Add(MakeShareable(new EComfyUIWorkflowType(EComfyUIWorkflowType::TextTo3D)));
+    WorkflowOptions.Add(MakeShareable(new EComfyUIWorkflowType(EComfyUIWorkflowType::ImageTo3D)));
+    WorkflowOptions.Add(MakeShareable(new EComfyUIWorkflowType(EComfyUIWorkflowType::TextureGeneration)));
+    WorkflowOptions.Add(MakeShareable(new EComfyUIWorkflowType(EComfyUIWorkflowType::Custom)));
     
     // 设置默认选择
     CurrentWorkflowType = WorkflowOptions[0];
@@ -137,6 +126,14 @@ void SComfyUIWidget::Construct(const FArguments& InArgs)
         .Padding(5.0f)
         [
             CreateControlButtonsWidget()
+        ]
+
+        // 进度显示区域
+        + SVerticalBox::Slot()
+        .AutoHeight()
+        .Padding(5.0f)
+        [
+            CreateProgressWidget()
         ]
 
         + SVerticalBox::Slot()
@@ -222,9 +219,9 @@ TSharedRef<SWidget> SComfyUIWidget::CreateWorkflowSelectionWidget()
         .AutoHeight()
         .Padding(0.0f, 2.0f)
         [
-            SAssignNew(WorkflowTypeComboBox, SComboBox<TSharedPtr<EWorkflowType>>)
+            SAssignNew(WorkflowTypeComboBox, SComboBox<TSharedPtr<EComfyUIWorkflowType>>)
             .OptionsSource(&WorkflowOptions)
-            .OnGenerateWidget(this, &SComfyUIWidget::OnGenerateWorkflowTypeWidget)
+            .OnGenerateWidget(this, &SComfyUIWidget::OnGeneratEComfyUIWorkflowTypeWidget)
             .OnSelectionChanged(this, &SComfyUIWidget::OnWorkflowTypeChanged)
             .InitiallySelectedItem(CurrentWorkflowType)
             [
@@ -384,38 +381,8 @@ TSharedRef<SWidget> SComfyUIWidget::CreatePromptInputWidget()
 TSharedRef<SWidget> SComfyUIWidget::CreateControlButtonsWidget()
 {
     return SNew(SVerticalBox)
-        
-        // 工作流管理按钮区域
-        // + SVerticalBox::Slot()
-        // .AutoHeight()
-        // .Padding(2.0f)
-        // [
-        //     SNew(SHorizontalBox)
-            
-        //     + SHorizontalBox::Slot()
-        //     .FillWidth(1.0f)
-        //     .Padding(2.0f)
-        //     [
-        //         SNew(SButton)
-        //         .Text(LOCTEXT("ImportWorkflowButton", "导入工作流"))
-        //         .OnClicked(this, &SComfyUIWidget::OnImportWorkflowClicked)
-        //         .HAlign(HAlign_Center)
-        //         .ToolTipText(LOCTEXT("ImportWorkflowTooltip", "导入ComfyUI工作流JSON文件"))
-        //     ]
 
-        //     + SHorizontalBox::Slot()
-        //     .FillWidth(1.0f)
-        //     .Padding(2.0f)
-        //     [
-        //         SNew(SButton)
-        //         .Text(LOCTEXT("ValidateWorkflowButton", "验证工作流"))
-        //         .OnClicked(this, &SComfyUIWidget::OnValidateWorkflowClicked)
-        //         .HAlign(HAlign_Center)
-        //         .ToolTipText(LOCTEXT("ValidateWorkflowTooltip", "验证当前工作流的有效性"))
-        //     ]
-        // ]
-
-        // 生成和保存按钮区域
+        // 生成和取消按钮区域
         + SVerticalBox::Slot()
         .AutoHeight()
         .Padding(2.0f)
@@ -429,9 +396,30 @@ TSharedRef<SWidget> SComfyUIWidget::CreateControlButtonsWidget()
                 SAssignNew(GenerateButton, SButton)
                 .Text(this, &SComfyUIWidget::GetGenerateButtonText)
                 .OnClicked(this, &SComfyUIWidget::OnGenerateClicked)
+                .IsEnabled(this, &SComfyUIWidget::IsGenerateButtonEnabled)
                 .HAlign(HAlign_Center)
                 .ToolTipText(LOCTEXT("GenerateTooltip", "使用当前工作流生成图像"))
             ]
+
+            + SHorizontalBox::Slot()
+            .FillWidth(1.0f)
+            .Padding(2.0f)
+            [
+                SAssignNew(CancelButton, SButton)
+                .Text(LOCTEXT("CancelButton", "取消"))
+                .OnClicked(this, &SComfyUIWidget::OnCancelClicked)
+                .Visibility(this, &SComfyUIWidget::GetCancelButtonVisibility)
+                .HAlign(HAlign_Center)
+                .ToolTipText(LOCTEXT("CancelTooltip", "取消当前生成任务"))
+            ]
+        ]
+
+        // 保存和预览按钮区域  
+        + SVerticalBox::Slot()
+        .AutoHeight()
+        .Padding(2.0f)
+        [
+            SNew(SHorizontalBox)
 
             + SHorizontalBox::Slot()
             .FillWidth(1.0f)
@@ -568,13 +556,13 @@ TSharedRef<SWidget> SComfyUIWidget::CreateImagePreviewWidget()
         ];
 }
 
-TSharedRef<SWidget> SComfyUIWidget::OnGenerateWorkflowTypeWidget(TSharedPtr<EWorkflowType> InOption)
+TSharedRef<SWidget> SComfyUIWidget::OnGeneratEComfyUIWorkflowTypeWidget(TSharedPtr<EComfyUIWorkflowType> InOption)
 {
     return SNew(STextBlock)
         .Text(WorkflowTypeToText(*InOption.Get()));
 }
 
-void SComfyUIWidget::OnWorkflowTypeChanged(TSharedPtr<EWorkflowType> NewSelection, ESelectInfo::Type SelectInfo)
+void SComfyUIWidget::OnWorkflowTypeChanged(TSharedPtr<EComfyUIWorkflowType> NewSelection, ESelectInfo::Type SelectInfo)
 {
     CurrentWorkflowType = NewSelection;
     UpdateWorkflowVisibility();
@@ -583,36 +571,51 @@ void SComfyUIWidget::OnWorkflowTypeChanged(TSharedPtr<EWorkflowType> NewSelectio
 FText SComfyUIWidget::GetCurrentWorkflowTypeText() const
 {
     if (CurrentWorkflowType.IsValid())
-    {
         return WorkflowTypeToText(*CurrentWorkflowType.Get());
-    }
     return LOCTEXT("NoWorkflowSelected", "选择工作流");
 }
 
 FText SComfyUIWidget::GetGenerateButtonText() const
 {
     if (bIsGenerating)
-    {
         return LOCTEXT("GeneratingButton", "生成中...");
+    
+    if (CurrentWorkflowType.IsValid())
+    {
+        switch (*CurrentWorkflowType)
+        {
+        case EComfyUIWorkflowType::TextToImage:
+        case EComfyUIWorkflowType::ImageToImage:
+            return LOCTEXT("GenerateButton", "生成图像");
+        case EComfyUIWorkflowType::TextTo3D:
+        case EComfyUIWorkflowType::ImageTo3D:
+            return LOCTEXT("Generate3DButton", "生成3D模型");
+        case EComfyUIWorkflowType::TextureGeneration:
+            return LOCTEXT("GenerateTextureButton", "生成纹理");
+        case EComfyUIWorkflowType::Custom:
+            return LOCTEXT("GenerateCustomButton", "生成内容");
+        default:
+            break;
+        }
     }
     return LOCTEXT("GenerateButton", "生成图像");
 }
 
-FText SComfyUIWidget::WorkflowTypeToText(EWorkflowType Type) const
+FText SComfyUIWidget::WorkflowTypeToText(EComfyUIWorkflowType Type) const
 {
     switch (Type)
     {
-    case EWorkflowType::TextToImage:
+    case EComfyUIWorkflowType::TextToImage:
         return LOCTEXT("TextToImage", "文生图");
-    case EWorkflowType::ImageToImage:
+    case EComfyUIWorkflowType::ImageToImage:
         return LOCTEXT("ImageToImage", "图生图");
-    case EWorkflowType::TextTo3D:
+    case EComfyUIWorkflowType::TextTo3D:
         return LOCTEXT("TextTo3D", "文生3D模型");
-    case EWorkflowType::ImageTo3D:
+    case EComfyUIWorkflowType::ImageTo3D:
         return LOCTEXT("ImageTo3D", "图生3D模型");
-    case EWorkflowType::TextureGeneration:
+    case EComfyUIWorkflowType::TextureGeneration:
         return LOCTEXT("TextureGeneration", "纹理生成");
-    case EWorkflowType::Custom:
+    case EComfyUIWorkflowType::Custom:
         return LOCTEXT("CustomWorkflow", "自定义工作流");
     default:
         return LOCTEXT("Unknown", "未知");
@@ -635,7 +638,7 @@ FReply SComfyUIWidget::OnGenerateClicked()
     }
     
     // 检查自定义工作流选择
-    if (CurrentWorkflowType.IsValid() && *CurrentWorkflowType == EWorkflowType::Custom)
+    if (CurrentWorkflowType.IsValid() && *CurrentWorkflowType == EComfyUIWorkflowType::Custom)
     {
         if (!CurrentCustomWorkflow.IsValid() || CurrentCustomWorkflow->IsEmpty())
         {
@@ -658,31 +661,88 @@ FReply SComfyUIWidget::OnGenerateClicked()
         
         // 设置世界上下文
         if (GEngine && GEngine->GetCurrentPlayWorld())
-        {
             Client->SetWorldContext(GEngine->GetCurrentPlayWorld());
-        }
         else if (GWorld)
-        {
             Client->SetWorldContext(GWorld);
-        }
         
         // 先测试连接
         Client->TestServerConnection(FOnConnectionTested::CreateLambda([this, Client, Prompt, NegativePrompt](bool bSuccess, FString ErrorMessage)
         {
             if (bSuccess)
             {
-                // 连接成功，开始图像生成
-                if (CurrentWorkflowType.IsValid() && *CurrentWorkflowType == EWorkflowType::Custom)
+                // 连接成功，根据工作流类型开始不同的生成过程
+                if (CurrentWorkflowType.IsValid() && *CurrentWorkflowType == EComfyUIWorkflowType::Custom)
                 {
                     Client->GenerateImageWithCustomWorkflow(Prompt, NegativePrompt, *CurrentCustomWorkflow,
-                        FOnImageGenerated::CreateSP(this, &SComfyUIWidget::OnImageGenerationComplete));
+                        FOnImageGenerated::CreateSP(this, &SComfyUIWidget::OnImageGenerationComplete),
+                        FOnGenerationProgress::CreateSP(this, &SComfyUIWidget::OnGenerationProgressUpdate),
+                        FOnGenerationStarted::CreateSP(this, &SComfyUIWidget::OnGenerationStarted),
+                        FOnGenerationCompleted::CreateSP(this, &SComfyUIWidget::OnGenerationCompleted));
+                }
+                else if (CurrentWorkflowType.IsValid())
+                {
+                    EComfyUIWorkflowType ClientWorkflowType = static_cast<EComfyUIWorkflowType>(*CurrentWorkflowType.Get());
+                    
+                    switch (ClientWorkflowType)
+                    {
+                    case EComfyUIWorkflowType::TextTo3D:
+                        // 文生3D
+                        Client->Generate3DModel(Prompt, NegativePrompt,
+                            FOn3DModelGenerated::CreateSP(this, &SComfyUIWidget::On3DModelGenerationComplete),
+                            FOnGenerationProgress::CreateSP(this, &SComfyUIWidget::OnGenerationProgressUpdate),
+                            FOnGenerationStarted::CreateSP(this, &SComfyUIWidget::OnGenerationStarted),
+                            FOnGenerationCompleted::CreateSP(this, &SComfyUIWidget::OnGenerationCompleted));
+                        break;
+                        
+                    case EComfyUIWorkflowType::ImageTo3D:
+                        // 图生3D - 需要先获取输入图像路径
+                        {
+                            FString InputImagePath = GetSelectedInputImagePath();
+                            if (InputImagePath.IsEmpty())
+                            {
+                                // 提示用户选择输入图像
+                                FNotificationInfo Info(LOCTEXT("NoInputImage", "图生3D需要选择输入图像"));
+                                Info.ExpireDuration = 3.0f;
+                                FSlateNotificationManager::Get().AddNotification(Info);
+                                GenerateButton->SetEnabled(true);
+                                bIsGenerating = false;
+                                return;
+                            }
+                            Client->Generate3DModelFromImage(Prompt, NegativePrompt, InputImagePath,
+                                FOn3DModelGenerated::CreateSP(this, &SComfyUIWidget::On3DModelGenerationComplete),
+                                FOnGenerationProgress::CreateSP(this, &SComfyUIWidget::OnGenerationProgressUpdate),
+                                FOnGenerationStarted::CreateSP(this, &SComfyUIWidget::OnGenerationStarted),
+                                FOnGenerationCompleted::CreateSP(this, &SComfyUIWidget::OnGenerationCompleted));
+                        }
+                        break;
+                        
+                    case EComfyUIWorkflowType::TextureGeneration:
+                        // PBR纹理生成
+                        Client->GeneratePBRTextures(Prompt, NegativePrompt,
+                            FOnTextureGenerated::CreateSP(this, &SComfyUIWidget::OnTextureGenerationComplete),
+                            FOnGenerationProgress::CreateSP(this, &SComfyUIWidget::OnGenerationProgressUpdate),
+                            FOnGenerationStarted::CreateSP(this, &SComfyUIWidget::OnGenerationStarted),
+                            FOnGenerationCompleted::CreateSP(this, &SComfyUIWidget::OnGenerationCompleted));
+                        break;
+                        
+                    default:
+                        // 默认图像生成（TextToImage, ImageToImage等）
+                        Client->GenerateImage(Prompt, NegativePrompt, ClientWorkflowType, 
+                            FOnImageGenerated::CreateSP(this, &SComfyUIWidget::OnImageGenerationComplete),
+                            FOnGenerationProgress::CreateSP(this, &SComfyUIWidget::OnGenerationProgressUpdate),
+                            FOnGenerationStarted::CreateSP(this, &SComfyUIWidget::OnGenerationStarted),
+                            FOnGenerationCompleted::CreateSP(this, &SComfyUIWidget::OnGenerationCompleted));
+                        break;
+                    }
                 }
                 else
                 {
-                    // Convert from SComfyUIWidget::EWorkflowType to EComfyUIWorkflowType
-                    EComfyUIWorkflowType ClientWorkflowType = static_cast<EComfyUIWorkflowType>(*CurrentWorkflowType.Get());
-                    Client->GenerateImage(Prompt, NegativePrompt, ClientWorkflowType, 
-                        FOnImageGenerated::CreateSP(this, &SComfyUIWidget::OnImageGenerationComplete));
+                    // 没有选择工作流类型，默认文生图
+                    Client->GenerateImage(Prompt, NegativePrompt, EComfyUIWorkflowType::TextToImage, 
+                        FOnImageGenerated::CreateSP(this, &SComfyUIWidget::OnImageGenerationComplete),
+                        FOnGenerationProgress::CreateSP(this, &SComfyUIWidget::OnGenerationProgressUpdate),
+                        FOnGenerationStarted::CreateSP(this, &SComfyUIWidget::OnGenerationStarted),
+                        FOnGenerationCompleted::CreateSP(this, &SComfyUIWidget::OnGenerationCompleted));
                 }
             }
             else
@@ -719,14 +779,10 @@ FReply SComfyUIWidget::OnSaveClicked()
         *FDateTime::Now().ToString(TEXT("%Y%m%d_%H%M%S")));
 
     // 保存纹理到项目的默认路径
-    if (SaveTextureToProject(GeneratedTexture, DefaultName))
-    {
+    if (UComfyUIFileManager::SaveTextureToProject(GeneratedTexture, DefaultName))
         ShowSaveSuccessNotification(FString::Printf(TEXT("/Game/ComfyUI/Generated/%s"), *DefaultName));
-    }
     else
-    {
         ShowSaveErrorNotification(TEXT("保存图像时发生错误"));
-    }
     
     return FReply::Handled();
 }
@@ -741,48 +797,28 @@ FReply SComfyUIWidget::OnSaveAsClicked()
     }
 
     // 打开文件对话框让用户选择保存路径和名称
-    IDesktopPlatform* DesktopPlatform = FDesktopPlatformModule::Get();
-    if (DesktopPlatform)
+    FString DefaultFilename = FString::Printf(TEXT("ComfyUI_Generated_%s.png"),
+        *FDateTime::Now().ToString(TEXT("%Y%m%d_%H%M%S")));
+    
+    FString SavePath;
+    // 显示保存对话框 - 保存到任意位置
+    if (UComfyUIFileManager::ShowSaveFileDialog(
+        TEXT("保存生成的图像"),
+        TEXT("PNG Files (*.png)|*.png|JPEG Files (*.jpg)|*.jpg|BMP Files (*.bmp)|*.bmp"),
+        UComfyUIFileManager::GetPluginDirectory(),
+        DefaultFilename,
+        SavePath))
     {
-        TArray<FString> OutFileNames;
-        FString DefaultFilename = FString::Printf(TEXT("ComfyUI_Generated_%s.png"),
-            *FDateTime::Now().ToString(TEXT("%Y%m%d_%H%M%S")));
-        
-        // 显示保存对话框 - 保存到任意位置
-        bool bDialogResult = DesktopPlatform->SaveFileDialog(
-            nullptr,
-            TEXT("保存生成的图像"),
-            FPaths::GetPath(FPaths::GetProjectFilePath()), // 默认到项目目录
-            DefaultFilename,
-            TEXT("PNG Files (*.png)|*.png|JPEG Files (*.jpg)|*.jpg|BMP Files (*.bmp)|*.bmp"),
-            EFileDialogFlags::None,
-            OutFileNames
-        );
+        UE_LOG(LogTemp, Log, TEXT("OnSaveAsClicked: User selected save path: %s"), *SavePath);
 
-        if (bDialogResult && OutFileNames.Num() > 0)
-        {
-            FString SavePath = OutFileNames[0];
-            UE_LOG(LogTemp, Log, TEXT("OnSaveAsClicked: User selected save path: %s"), *SavePath);
-
-            // 直接保存为图像文件，而不是UE资产
-            if (SaveTextureToFile(GeneratedTexture, SavePath))
-            {
-                ShowSaveSuccessNotification(FString::Printf(TEXT("文件已保存到: %s"), *SavePath));
-            }
-            else
-            {
-                ShowSaveErrorNotification(TEXT("保存图像文件时发生错误"));
-            }
-        }
+        // 直接保存为图像文件，而不是UE资产
+        if (UComfyUIFileManager::SaveTextureToFile(GeneratedTexture, SavePath))
+            ShowSaveSuccessNotification(FString::Printf(TEXT("文件已保存到: %s"), *SavePath));
         else
-        {
-            UE_LOG(LogTemp, Log, TEXT("OnSaveAsClicked: User cancelled save dialog"));
-        }
+            ShowSaveErrorNotification(TEXT("保存图像文件时发生错误"));
     }
     else
-    {
-        ShowSaveErrorNotification(TEXT("无法打开文件对话框"));
-    }
+        UE_LOG(LogTemp, Log, TEXT("OnSaveAsClicked: User cancelled save dialog"));
     
     return FReply::Handled();
 }
@@ -790,6 +826,7 @@ FReply SComfyUIWidget::OnSaveAsClicked()
 FReply SComfyUIWidget::OnPreviewClicked()
 {
     // TODO: 实现预览功能
+    UComfyUIWorkflowService::Get()->WorkflowManager->RunWorkflowTests();
     FNotificationInfo Info(LOCTEXT("PreviewNotImplemented", "预览功能暂未实现"));
     Info.ExpireDuration = 3.0f;
     FSlateNotificationManager::Get().AddNotification(Info);
@@ -799,89 +836,76 @@ FReply SComfyUIWidget::OnPreviewClicked()
 
 FReply SComfyUIWidget::OnLoadImageClicked()
 {
-    IDesktopPlatform* DesktopPlatform = FDesktopPlatformModule::Get();
-    if (DesktopPlatform)
+    TArray<FString> FileNames;
+    const FString FileTypes = TEXT("Image Files (*.png;*.jpg;*.jpeg;*.bmp)|*.png;*.jpg;*.jpeg;*.bmp");
+    
+    if (UComfyUIFileManager::ShowOpenFileDialog(
+        TEXT("选择输入图像"),
+        FileTypes,
+        TEXT(""),
+        FileNames))
     {
-        TArray<FString> FileNames;
-        const FString FileTypes = TEXT("Image Files (*.png;*.jpg;*.jpeg;*.bmp)|*.png;*.jpg;*.jpeg;*.bmp");
-        
-        if (DesktopPlatform->OpenFileDialog(
-            nullptr,
-            TEXT("选择输入图像"),
-            TEXT(""),
-            TEXT(""),
-            FileTypes,
-            EFileDialogFlags::None,
-            FileNames))
+        if (FileNames.Num() > 0)
         {
-            if (FileNames.Num() > 0)
+            FString ImagePath = FileNames[0];
+            
+            // 加载图像文件
+            TArray<uint8> ImageData;
+            if (UComfyUIFileManager::LoadImageFromFile(ImagePath, ImageData))
             {
-                FString ImagePath = FileNames[0];
-                
-                // 加载图像文件
-                TArray<uint8> ImageData;
-                if (FFileHelper::LoadFileToArray(ImageData, *ImagePath))
+                // 使用ComfyUIFileManager创建纹理
+                UTexture2D* LoadedTexture = UComfyUIFileManager::CreateTextureFromImageData(ImageData);
+                if (LoadedTexture)
                 {
-                    // 使用ComfyUIClient创建纹理
-                    UComfyUIClient* TempClient = NewObject<UComfyUIClient>();
-                    UTexture2D* LoadedTexture = TempClient->CreateTextureFromImageData(ImageData);
-                    if (LoadedTexture)
-                    {
-                        InputImage = LoadedTexture;
-                        
-                        // 同步到拖拽Widget
-                        if (InputImageDragDropWidget.IsValid())
-                        {
-                            InputImageDragDropWidget->SetImage(InputImage);
-                        }
-                        
-                        // 创建Slate画刷（为了兼容性保留）
-                        InputImageBrush = MakeShareable(new FSlateBrush());
-                        InputImageBrush->SetResourceObject(InputImage);
-                        InputImageBrush->DrawAs = ESlateBrushDrawType::Image;
-                        
-                        // 计算合适的显示尺寸
-                        FVector2D OriginalSize = FVector2D(InputImage->GetSizeX(), InputImage->GetSizeY());
-                        FVector2D PreviewSize = CalculateImageFitSize(OriginalSize, FVector2D(140.0f, 140.0f));
-                        InputImageBrush->ImageSize = PreviewSize;
-                        
-                        // 更新UI
-                        if (InputImagePreview.IsValid())
-                        {
-                            InputImagePreview->SetImage(InputImageBrush.Get());
-                        }
-                        
-                        // 启用清除按钮
-                        if (ClearImageButton.IsValid())
-                        {
-                            ClearImageButton->SetEnabled(true);
-                        }
-                        
-                        // 显示成功通知
-                        FNotificationInfo Info(FText::Format(
-                            LOCTEXT("ImageLoaded", "成功加载图像：{0}"),
-                            FText::FromString(FPaths::GetBaseFilename(ImagePath))
-                        ));
-                        Info.ExpireDuration = 3.0f;
-                        FSlateNotificationManager::Get().AddNotification(Info);
-                    }
-                    else
-                    {
-                        FNotificationInfo Info(LOCTEXT("ImageLoadFailed", "无法创建纹理，请检查图像格式"));
-                        Info.ExpireDuration = 3.0f;
-                        FSlateNotificationManager::Get().AddNotification(Info);
-                    }
+                    InputImage = LoadedTexture;
+                    
+                    // 同步到拖拽Widget
+                    if (InputImageDragDropWidget.IsValid())
+                        InputImageDragDropWidget->SetImage(InputImage);
+                    
+                    // 创建Slate画刷（为了兼容性保留）
+                    InputImageBrush = MakeShareable(new FSlateBrush());
+                    InputImageBrush->SetResourceObject(InputImage);
+                    InputImageBrush->DrawAs = ESlateBrushDrawType::Image;
+                    
+                    // 计算合适的显示尺寸
+                    FVector2D OriginalSize = FVector2D(InputImage->GetSizeX(), InputImage->GetSizeY());
+                    FVector2D PreviewSize = CalculateImageFitSize(OriginalSize, FVector2D(140.0f, 140.0f));
+                    InputImageBrush->ImageSize = PreviewSize;
+                    
+                    // 更新UI
+                    if (InputImagePreview.IsValid())
+                        InputImagePreview->SetImage(InputImageBrush.Get());
+                    
+                    // 启用清除按钮
+                    if (ClearImageButton.IsValid())
+                        ClearImageButton->SetEnabled(true);
+                    
+                    // 显示成功通知
+                    FNotificationInfo Info(FText::Format(
+                        LOCTEXT("ImageLoaded", "成功加载图像：{0}"),
+                        FText::FromString(FPaths::GetBaseFilename(ImagePath))
+                    ));
+                    Info.ExpireDuration = 3.0f;
+                    FSlateNotificationManager::Get().AddNotification(Info);
                 }
                 else
                 {
-                    FNotificationInfo Info(LOCTEXT("FileLoadFailed", "无法读取图像文件"));
+                    FNotificationInfo Info(LOCTEXT("ImageLoadFailed", "无法创建纹理，请检查图像格式"));
                     Info.ExpireDuration = 3.0f;
                     FSlateNotificationManager::Get().AddNotification(Info);
                 }
             }
+            else
+            {
+                FNotificationInfo Info(LOCTEXT("FileLoadFailed", "无法读取图像文件"));
+                Info.ExpireDuration = 3.0f;
+                FSlateNotificationManager::Get().AddNotification(Info);
+            }
         }
     }
-    
+    else
+        ShowSaveErrorNotification(TEXT("无法打开文件对话框"));
     return FReply::Handled();
 }
 
@@ -893,9 +917,7 @@ FReply SComfyUIWidget::OnClearImageClicked()
     
     // 同步到拖拽Widget
     if (InputImageDragDropWidget.IsValid())
-    {
         InputImageDragDropWidget->ClearImage();
-    }
     
     // 恢复默认图像显示（为了兼容性保留）
     if (InputImagePreview.IsValid())
@@ -906,9 +928,7 @@ FReply SComfyUIWidget::OnClearImageClicked()
     
     // 禁用清除按钮
     if (ClearImageButton.IsValid())
-    {
         ClearImageButton->SetEnabled(false);
-    }
     
     // 显示通知
     FNotificationInfo Info(LOCTEXT("ImageCleared", "已清除输入图像"));
@@ -921,24 +941,18 @@ FReply SComfyUIWidget::OnClearImageClicked()
 void SComfyUIWidget::OnImageDropped(UTexture2D* DroppedTexture)
 {
     if (!DroppedTexture)
-    {
         return;
-    }
     
     // 设置输入图像
     InputImage = DroppedTexture;
     
     // 同步到拖拽Widget（虽然它应该已经自己处理了）
     if (InputImageDragDropWidget.IsValid())
-    {
         InputImageDragDropWidget->SetImage(InputImage);
-    }
     
     // 启用清除按钮
     if (ClearImageButton.IsValid())
-    {
         ClearImageButton->SetEnabled(true);
-    }
 }
 
 void SComfyUIWidget::OnImageGenerationComplete(UTexture2D* GeneratedImage)
@@ -992,54 +1006,54 @@ void SComfyUIWidget::OnImageGenerationComplete(UTexture2D* GeneratedImage)
 
 FReply SComfyUIWidget::OnImportWorkflowClicked()
 {
-    IDesktopPlatform* DesktopPlatform = FDesktopPlatformModule::Get();
-    if (DesktopPlatform)
+    TArray<FString> FileNames;
+    const FString FileTypes = TEXT("ComfyUI Workflow Files (*.json)|*.json");
+    
+    if (UComfyUIFileManager::ShowOpenFileDialog(
+        TEXT("Import ComfyUI Workflow"),
+        FileTypes,
+        TEXT(""),
+        FileNames))
     {
-        TArray<FString> FileNames;
-        const FString FileTypes = TEXT("ComfyUI Workflow Files (*.json)|*.json");
-        
-        if (DesktopPlatform->OpenFileDialog(
-            nullptr,
-            TEXT("Import ComfyUI Workflow"),
-            TEXT(""),
-            TEXT(""),
-            FileTypes,
-            EFileDialogFlags::None,
-            FileNames))
+        if (FileNames.Num() > 0)
         {
-            if (FileNames.Num() > 0)
+            FString SourceFile = FileNames[0];
+            FString WorkflowName = FPaths::GetBaseFilename(SourceFile);
+            
+            // 使用工作流服务进行导入
+            UComfyUIWorkflowService* WorkflowService = UComfyUIWorkflowService::Get();
+            FString ImportError;
+            bool bImportSuccess = false;
+            
+            if (WorkflowService)
             {
-                FString SourceFile = FileNames[0];
-                FString WorkflowName = FPaths::GetBaseFilename(SourceFile);
-                
-                // 创建ComfyUI客户端实例进行导入
-                UComfyUIClient* Client = NewObject<UComfyUIClient>();
-                if (Client)
-                {
-                    FString ImportError;
-                    bool bImportSuccess = Client->ImportWorkflowFile(SourceFile, WorkflowName, ImportError);
-                    
-                    if (bImportSuccess)
-                    {
-                        RefreshCustomWorkflowList();
+                bImportSuccess = WorkflowService->ImportWorkflow(SourceFile, WorkflowName, ImportError);
+            }
+            else
+            {
+                // 如果服务不可用，回退到文件管理器
+                bImportSuccess = UComfyUIFileManager::ImportWorkflowTemplate(SourceFile, WorkflowName, ImportError);
+            }
+            
+            if (bImportSuccess)
+            {
+                RefreshCustomWorkflowList();
                         
-                        FNotificationInfo Info(FText::Format(
-                            LOCTEXT("WorkflowImported", "成功导入并验证工作流：{0}"),
-                            FText::FromString(WorkflowName)
-                        ));
-                        Info.ExpireDuration = 3.0f;
-                        FSlateNotificationManager::Get().AddNotification(Info);
-                    }
-                    else
-                    {
-                        FNotificationInfo Info(FText::Format(
-                            LOCTEXT("ImportFailed", "导入工作流失败：{0}"),
-                            FText::FromString(ImportError)
-                        ));
-                        Info.ExpireDuration = 5.0f;
-                        FSlateNotificationManager::Get().AddNotification(Info);
-                    }
-                }
+                FNotificationInfo Info(FText::Format(
+                    LOCTEXT("WorkflowImported", "成功导入并验证工作流：{0}"),
+                    FText::FromString(WorkflowName)
+                ));
+                Info.ExpireDuration = 3.0f;
+                FSlateNotificationManager::Get().AddNotification(Info);
+            }
+            else
+            {
+                FNotificationInfo Info(FText::Format(
+                    LOCTEXT("ImportFailed", "导入工作流失败：{0}"),
+                    FText::FromString(ImportError)
+                ));
+                Info.ExpireDuration = 5.0f;
+                FSlateNotificationManager::Get().AddNotification(Info);
             }
         }
     }
@@ -1064,14 +1078,14 @@ TSharedRef<SWidget> SComfyUIWidget::OnGenerateCustomWorkflowWidget(TSharedPtr<FS
         .Text(FText::FromString(InOption.IsValid() ? *InOption : TEXT("None")));
 }
 
+#pragma optimize( "", off )
 FText SComfyUIWidget::GetCustomWorkflowText(TSharedPtr<FString> InOption) const
 {
-    if (InOption.IsValid())
-    {
-        return FText::FromString(*InOption);
-    }
+    if (CurrentCustomWorkflow.IsValid())
+        return FText::FromString(*CurrentCustomWorkflow);
     return LOCTEXT("NoCustomWorkflowSelected", "选择自定义工作流...");
 }
+#pragma optimize( "", on )
 
 void SComfyUIWidget::OnCustomWorkflowChanged(TSharedPtr<FString> NewSelection, ESelectInfo::Type SelectInfo)
 {
@@ -1087,12 +1101,10 @@ void SComfyUIWidget::OnCustomWorkflowChanged(TSharedPtr<FString> NewSelection, E
     }
 }
 
-FText SComfyUIWidget::GetWorkflowTypeText(TSharedPtr<EWorkflowType> InOption) const
+FText SComfyUIWidget::GetWorkflowTypeText(TSharedPtr<EComfyUIWorkflowType> InOption) const
 {
     if (!InOption.IsValid())
-    {
         return LOCTEXT("InvalidWorkflowType", "无效");
-    }
     
     return WorkflowTypeToText(*InOption);
 }
@@ -1101,20 +1113,22 @@ void SComfyUIWidget::RefreshCustomWorkflowList()
 {
     CustomWorkflowNames.Empty();
     
-    // 获取Templates目录中的所有JSON文件
-    FString TemplatesDir = FPaths::ProjectPluginsDir() / TEXT("ComfyUIIntegration/Config/Templates");
+    // 使用工作流服务扫描工作流模板
+    UComfyUIWorkflowService* WorkflowService = UComfyUIWorkflowService::Get();
+    TArray<FString> WorkflowNames;
     
-    if (FPaths::DirectoryExists(TemplatesDir))
+    if (WorkflowService)
     {
-        TArray<FString> TemplateFiles;
-        IFileManager::Get().FindFiles(TemplateFiles, *(TemplatesDir / TEXT("*.json")), true, false);
-        
-        for (const FString& TemplateFile : TemplateFiles)
-        {
-            FString WorkflowName = FPaths::GetBaseFilename(TemplateFile);
-            CustomWorkflowNames.Add(MakeShareable(new FString(WorkflowName)));
-        }
+        WorkflowNames = WorkflowService->GetAvailableWorkflowNames();
     }
+    else
+    {
+        // 如果服务不可用，回退到直接扫描文件
+        WorkflowNames = UComfyUIFileManager::ScanWorkflowTemplates();
+    }
+    
+    for (const FString& WorkflowName : WorkflowNames)
+        CustomWorkflowNames.Add(MakeShareable(new FString(WorkflowName)));
     
     // 如果有自定义工作流ComboBox，刷新它
     if (CustomWorkflowComboBox.IsValid())
@@ -1137,36 +1151,30 @@ void SComfyUIWidget::UpdateWorkflowVisibility()
     Invalidate(EInvalidateWidget::Layout);
     
     // 如果切换到自定义工作流且当前没有选择工作流，尝试选择第一个可用的
-    if (CurrentWorkflowType.IsValid() && *CurrentWorkflowType == EWorkflowType::Custom)
+    if (CurrentWorkflowType.IsValid() && *CurrentWorkflowType == EComfyUIWorkflowType::Custom)
     {
         // 确保自定义工作流列表是最新的
         if (CustomWorkflowNames.Num() == 0)
-        {
             RefreshCustomWorkflowList();
-        }
         
-    // 如果没有选择自定义工作流但有可用选项，选择第一个
-    if (!CurrentCustomWorkflow.IsValid() && CustomWorkflowNames.Num() > 0)
-    {
-        CurrentCustomWorkflow = CustomWorkflowNames[0];
-    }
+        // 如果没有选择自定义工作流但有可用选项，选择第一个
+        if (!CurrentCustomWorkflow.IsValid() && CustomWorkflowNames.Num() > 0)
+            CurrentCustomWorkflow = CustomWorkflowNames[0];
 
-    // 只有CurrentCustomWorkflow有效时才设置ComboBox选中项，否则输出警告
-    if (CurrentCustomWorkflow.IsValid())
-    {
-        if (CustomWorkflowComboBox.IsValid())
+        // 只有CurrentCustomWorkflow有效时才设置ComboBox选中项，否则输出警告
+        if (CurrentCustomWorkflow.IsValid())
         {
-            CustomWorkflowComboBox->SetSelectedItem(CurrentCustomWorkflow);
+            if (CustomWorkflowComboBox.IsValid())
+                CustomWorkflowComboBox->SetSelectedItem(CurrentCustomWorkflow);
+            DetectWorkflowType(*CurrentCustomWorkflow);
         }
-        DetectWorkflowType(*CurrentCustomWorkflow);
-    }
-    else
-    {
-        UE_LOG(LogTemp, Warning, TEXT("UpdateWorkflowVisibility: CurrentCustomWorkflow无效，无法设置ComboBox选中项。Widget=%p, WorkflowType=%d, CustomWorkflowNames.Num=%d"),
-            this,
-            CurrentWorkflowType.IsValid() ? (int32)*CurrentWorkflowType : -1,
-            CustomWorkflowNames.Num());
-    }
+        else
+        {
+            UE_LOG(LogTemp, Warning, TEXT("UpdateWorkflowVisibility: CurrentCustomWorkflow无效，无法设置ComboBox选中项。Widget=%p, WorkflowType=%d, CustomWorkflowNames.Num=%d"),
+                this,
+                CurrentWorkflowType.IsValid() ? (int32)*CurrentWorkflowType : -1,
+                CustomWorkflowNames.Num());
+        }
     }
     else
     {
@@ -1182,35 +1190,27 @@ void SComfyUIWidget::UpdateWorkflowVisibility()
 
 EVisibility SComfyUIWidget::GetCustomWorkflowVisibility() const
 {
-    if (CurrentWorkflowType.IsValid() && *CurrentWorkflowType == EWorkflowType::Custom)
-    {
+    if (CurrentWorkflowType.IsValid() && *CurrentWorkflowType == EComfyUIWorkflowType::Custom)
         return EVisibility::Visible;
-    }
     return EVisibility::Collapsed;
 }
 
 EVisibility SComfyUIWidget::GetInputImageVisibility() const
 {
     // 检查当前工作流类型是否需要输入图像
-    EWorkflowType TypeToCheck = EWorkflowType::TextToImage;
+    EComfyUIWorkflowType TypeToCheck = EComfyUIWorkflowType::TextToImage;
     
-    if (CurrentWorkflowType.IsValid() && *CurrentWorkflowType == EWorkflowType::Custom)
-    {
+    if (CurrentWorkflowType.IsValid() && *CurrentWorkflowType == EComfyUIWorkflowType::Custom)
         // 自定义工作流：使用检测到的类型
         TypeToCheck = DetectedCustomWorkflowType;
-    }
     else if (CurrentWorkflowType.IsValid())
-    {
         // 预定义工作流：使用选择的类型
         TypeToCheck = *CurrentWorkflowType;
-    }
     
     // 这些工作流类型需要输入图像
-    if (TypeToCheck == EWorkflowType::ImageToImage ||
-        TypeToCheck == EWorkflowType::ImageTo3D)
-    {
+    if (TypeToCheck == EComfyUIWorkflowType::ImageToImage ||
+        TypeToCheck == EComfyUIWorkflowType::ImageTo3D)
         return EVisibility::Visible;
-    }
     
     return EVisibility::Collapsed;
 }
@@ -1230,16 +1230,16 @@ FReply SComfyUIWidget::OnValidateWorkflowClicked()
         return FReply::Handled();
     }
     
-    // 创建ComfyUI客户端实例
-    UComfyUIClient* Client = NewObject<UComfyUIClient>();
-    if (Client)
+    // 使用工作流服务进行验证
+    UComfyUIWorkflowService* WorkflowService = UComfyUIWorkflowService::Get();
+    if (WorkflowService)
     {
         // 查找工作流文件
         FString TemplatesDir = FPaths::ProjectPluginsDir() / TEXT("ComfyUIIntegration/Config/Templates");
         FString WorkflowFile = TemplatesDir / (*CurrentCustomWorkflow + TEXT(".json"));
         
         FString ValidationError;
-        bool bIsValid = Client->ValidateWorkflowFile(WorkflowFile, ValidationError);
+        bool bIsValid = WorkflowService->ValidateWorkflow(WorkflowFile, ValidationError);
         
         if (bIsValid)
         {
@@ -1294,660 +1294,6 @@ FVector2D SComfyUIWidget::CalculateImageFitSize(const FVector2D& ImageSize, cons
     return FitSize;
 }
 
-bool SComfyUIWidget::SaveTextureToProject(UTexture2D* Texture, const FString& AssetName, const FString& PackagePath)
-{
-    if (!Texture)
-    {
-        UE_LOG(LogTemp, Error, TEXT("SaveTextureToProject: Texture is null"));
-        return false;
-    }
-
-    // 验证源纹理是否有效
-    if (!Texture->GetPlatformData() || Texture->GetPlatformData()->Mips.Num() == 0)
-    {
-        UE_LOG(LogTemp, Error, TEXT("SaveTextureToProject: Source texture has no platform data or mips"));
-        return false;
-    }
-
-    if (Texture->GetSizeX() <= 0 || Texture->GetSizeY() <= 0)
-    {
-        UE_LOG(LogTemp, Error, TEXT("SaveTextureToProject: Invalid texture dimensions: %dx%d"), Texture->GetSizeX(), Texture->GetSizeY());
-        return false;
-    }
-
-    if (AssetName.IsEmpty())
-    {
-        UE_LOG(LogTemp, Error, TEXT("SaveTextureToProject: AssetName is empty"));
-        return false;
-    }
-
-    // 确保包路径有效
-    FString FinalPackagePath = PackagePath;
-    if (FinalPackagePath.IsEmpty() || !FinalPackagePath.StartsWith(TEXT("/Game/")))
-    {
-        FinalPackagePath = TEXT("/Game/ComfyUI/Generated");
-    }
-
-    UE_LOG(LogTemp, Log, TEXT("SaveTextureToProject: Starting save process - AssetName: %s, PackagePath: %s"), *AssetName, *FinalPackagePath);
-
-    // 生成唯一的资产名称
-    FString UniqueAssetName;
-    try
-    {
-        UniqueAssetName = GenerateUniqueAssetName(AssetName, FinalPackagePath);
-        if (UniqueAssetName.IsEmpty())
-        {
-            UE_LOG(LogTemp, Error, TEXT("SaveTextureToProject: Failed to generate unique asset name"));
-            return false;
-        }
-    }
-    catch (...)
-    {
-        UE_LOG(LogTemp, Error, TEXT("SaveTextureToProject: Exception in GenerateUniqueAssetName"));
-        return false;
-    }
-
-    FString FullPackageName = FinalPackagePath + TEXT("/") + UniqueAssetName;
-
-    // 验证包名称
-    if (!FPackageName::IsValidLongPackageName(FullPackageName))
-    {
-        UE_LOG(LogTemp, Error, TEXT("SaveTextureToProject: Invalid package name: %s"), *FullPackageName);
-        return false;
-    }
-
-    UE_LOG(LogTemp, Log, TEXT("SaveTextureToProject: Creating asset at path: %s"), *FullPackageName);
-
-    try
-    {
-        UTexture2D* TextureToSave = nullptr;
-        UPackage* Package = nullptr;
-        
-        // 检查是否可以直接使用传入的纹理
-        UPackage* SourcePackage = Texture->GetPackage();
-        bool bCanReuseTexture = false;
-        
-        // 如果传入纹理是临时的或者在临时包中，我们可以尝试直接移动它
-        if (SourcePackage && (SourcePackage->HasAnyFlags(RF_Transient) || 
-            SourcePackage->GetName().StartsWith(TEXT("/Engine/Transient")) ||
-            SourcePackage->GetName().StartsWith(TEXT("/Temp/"))))
-        {
-            // 检查纹理是否有适当的标志位用于重新定位
-            if (Texture->HasAnyFlags(RF_Transient) || !Texture->HasAnyFlags(RF_Public | RF_Standalone))
-            {
-                UE_LOG(LogTemp, Log, TEXT("SaveTextureToProject: Attempting to relocate existing transient texture"));
-                
-                // 创建新包
-                Package = CreatePackage(*FullPackageName);
-                if (Package)
-                {
-                    Package->FullyLoad();
-                    
-                    // 尝试重命名和移动纹理到新包
-                    bool bRenamed = Texture->Rename(*UniqueAssetName, Package, REN_None);
-                    if (bRenamed)
-                    {
-                        // 设置正确的对象标志
-                        Texture->SetFlags(RF_Public | RF_Standalone | RF_Transactional);
-                        Texture->ClearFlags(RF_Transient);
-                        
-                        // 确保纹理状态正确
-                        Texture->PostEditChange();
-                        Texture->UpdateResource();
-                        
-                        TextureToSave = Texture;
-                        bCanReuseTexture = true;
-                        
-                        UE_LOG(LogTemp, Log, TEXT("SaveTextureToProject: Successfully relocated existing texture"));
-                    }
-                    else
-                    {
-                        UE_LOG(LogTemp, Warning, TEXT("SaveTextureToProject: Failed to relocate texture, falling back to copy"));
-                    }
-                }
-            }
-        }
-        
-        // 如果无法重用纹理，则创建新的纹理对象
-        if (!bCanReuseTexture)
-        {
-            // 创建包
-            Package = CreatePackage(*FullPackageName);
-            if (!Package)
-            {
-                UE_LOG(LogTemp, Error, TEXT("SaveTextureToProject: Failed to create package: %s"), *FullPackageName);
-                return false;
-            }
-            Package->FullyLoad();
-
-            // 创建新纹理对象
-            UTexture2D* NewTexture = NewObject<UTexture2D>(Package, *UniqueAssetName, RF_Public | RF_Standalone | RF_Transactional);
-            if (!NewTexture)
-            {
-                UE_LOG(LogTemp, Error, TEXT("SaveTextureToProject: Failed to create texture object"));
-                return false;
-            }
-
-            // 复制源纹理的源数据
-            if (Texture->Source.IsValid())
-            {
-                // 获取原始纹理的尺寸和格式
-                int32 SizeX = Texture->Source.GetSizeX();
-                int32 SizeY = Texture->Source.GetSizeY();
-                int32 NumSlices = Texture->Source.GetNumSlices();
-                int32 NumMips = Texture->Source.GetNumMips();
-                ETextureSourceFormat Format = Texture->Source.GetFormat();
-                
-                // 获取原始纹理的源数据 - 使用正确的API
-                TArray64<uint8> SourceData;
-                if (Texture->Source.GetMipData(SourceData, 0))
-                {
-                    // 初始化新纹理的源数据
-                    NewTexture->Source.Init(SizeX, SizeY, NumSlices, NumMips, Format, SourceData.GetData());
-                    
-                    UE_LOG(LogTemp, Log, TEXT("SaveTextureToProject: Successfully copied source data (%dx%d, %lld bytes)"), 
-                           SizeX, SizeY, SourceData.Num());
-                }
-                else
-                {
-                    UE_LOG(LogTemp, Error, TEXT("SaveTextureToProject: Failed to get source mip data"));
-                    return false;
-                }
-            }
-            else
-            {
-                UE_LOG(LogTemp, Error, TEXT("SaveTextureToProject: Source texture has no valid source data"));
-                return false;
-            }
-            
-            // 复制纹理属性
-            NewTexture->CompressionSettings = Texture->CompressionSettings;
-            NewTexture->Filter = Texture->Filter;
-            NewTexture->AddressX = Texture->AddressX;
-            NewTexture->AddressY = Texture->AddressY;
-            NewTexture->LODGroup = Texture->LODGroup;
-            NewTexture->SRGB = Texture->SRGB;
-            NewTexture->MipGenSettings = Texture->MipGenSettings;
-            
-            // 触发纹理重建
-            NewTexture->PostEditChange();
-            NewTexture->UpdateResource();
-            
-            TextureToSave = NewTexture;
-            
-            UE_LOG(LogTemp, Log, TEXT("SaveTextureToProject: Successfully created texture copy"));
-        }
-        
-        // 验证要保存的纹理是否有效
-        if (!TextureToSave || !TextureToSave->GetPlatformData() || TextureToSave->GetPlatformData()->Mips.Num() == 0)
-        {
-            UE_LOG(LogTemp, Error, TEXT("SaveTextureToProject: Texture to save has no platform data or mips"));
-            return false;
-        }
-
-        UE_LOG(LogTemp, Log, TEXT("SaveTextureToProject: Successfully prepared texture with %d mips"), 
-               TextureToSave->GetPlatformData()->Mips.Num());
-
-        // 标记包为脏
-        Package->SetDirtyFlag(true);
-
-        // 通知资产注册表
-        if (FModuleManager::Get().IsModuleLoaded("AssetRegistry"))
-        {
-            FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
-            AssetRegistryModule.Get().AssetCreated(TextureToSave);
-        }
-
-        // 准备保存路径
-        FString PackageFileName = FPackageName::LongPackageNameToFilename(FullPackageName, FPackageName::GetAssetPackageExtension());
-        
-        // 确保目录存在
-        FString PackageDir = FPaths::GetPath(PackageFileName);
-        IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
-        if (!PlatformFile.DirectoryExists(*PackageDir))
-        {
-            PlatformFile.CreateDirectoryTree(*PackageDir);
-        }
-
-        UE_LOG(LogTemp, Log, TEXT("SaveTextureToProject: About to save package to: %s"), *PackageFileName);
-
-        // 最终验证纹理状态
-        if (!IsValid(TextureToSave))
-        {
-            UE_LOG(LogTemp, Error, TEXT("SaveTextureToProject: TextureToSave is not valid before save"));
-            return false;
-        }
-
-        // 确保纹理平台数据已准备就绪
-        if (TextureToSave->GetPlatformData())
-        {
-            // 强制等待纹理编译完成
-            TextureToSave->FinishCachePlatformData();
-            
-            // 再次验证平台数据
-            if (!TextureToSave->GetPlatformData() || TextureToSave->GetPlatformData()->Mips.Num() == 0)
-            {
-                UE_LOG(LogTemp, Error, TEXT("SaveTextureToProject: Platform data not ready after cache"));
-                return false;
-            }
-        }
-
-        // 确保包状态正确
-        Package->SetDirtyFlag(true);
-        Package->FullyLoad();
-
-        // 保存包到磁盘 - 使用新的FSavePackageArgs API
-        bool bSaved = false;
-        try 
-        {
-            UE_LOG(LogTemp, Log, TEXT("SaveTextureToProject: Calling SavePackage..."));
-            
-            // 使用新的FSavePackageArgs API
-            FSavePackageArgs SaveArgs;
-            SaveArgs.TopLevelFlags = RF_Standalone;
-            SaveArgs.SaveFlags = SAVE_None;
-            SaveArgs.bForceByteSwapping = false;
-            SaveArgs.bWarnOfLongFilename = true;
-            SaveArgs.bSlowTask = false; // 避免UI阻塞
-            // SaveArgs.TargetPlatform = nullptr;
-            SaveArgs.FinalTimeStamp = FDateTime::MinValue();
-            SaveArgs.Error = GError;
-            
-            bSaved = UPackage::SavePackage(Package, TextureToSave, *PackageFileName, SaveArgs);
-            
-            UE_LOG(LogTemp, Log, TEXT("SaveTextureToProject: Save operation returned: %s"), bSaved ? TEXT("true") : TEXT("false"));
-        }
-        catch (const std::exception& Exception)
-        {
-            UE_LOG(LogTemp, Error, TEXT("SaveTextureToProject: std::exception during SavePackage: %hs"), Exception.what());
-            return false;
-        }
-        catch (...)
-        {
-            UE_LOG(LogTemp, Error, TEXT("SaveTextureToProject: Unknown exception during SavePackage"));
-            return false;
-        }
-
-        if (bSaved)
-        {
-            if (!FullPackageName.IsEmpty())
-            {
-                UE_LOG(LogTemp, Log, TEXT("SaveTextureToProject: Successfully saved texture to %s"), *FullPackageName);
-            }
-            else
-            {
-                UE_LOG(LogTemp, Log, TEXT("SaveTextureToProject: Successfully saved texture (FullPackageName is empty)"));
-            }
-            return true;
-        }
-        else
-        {
-            if (!PackageFileName.IsEmpty())
-            {
-                UE_LOG(LogTemp, Error, TEXT("SaveTextureToProject: Failed to save package to disk: %s"), *PackageFileName);
-            }
-            else
-            {
-                UE_LOG(LogTemp, Error, TEXT("SaveTextureToProject: Failed to save package to disk (PackageFileName is empty)"));
-            }
-            return false;
-        }
-    }
-    catch (...)
-    {
-        UE_LOG(LogTemp, Error, TEXT("SaveTextureToProject: Exception occurred during save operation"));
-        return false;
-    }
-}
-
-FString SComfyUIWidget::GenerateUniqueAssetName(const FString& BaseName, const FString& PackagePath) const
-{
-    FString CleanBaseName = BaseName;
-    
-    // 移除非法字符
-    CleanBaseName = CleanBaseName.Replace(TEXT(" "), TEXT("_"));
-    CleanBaseName = CleanBaseName.Replace(TEXT("-"), TEXT("_"));
-    CleanBaseName = CleanBaseName.Replace(TEXT("."), TEXT(""));
-    CleanBaseName = CleanBaseName.Replace(TEXT(":"), TEXT(""));
-    
-    // 确保名称不为空
-    if (CleanBaseName.IsEmpty())
-    {
-        CleanBaseName = TEXT("ComfyUI_Generated");
-    }
-
-    // 检查是否已经存在同名资产
-    FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
-    IAssetRegistry& AssetRegistry = AssetRegistryModule.Get();
-
-    FString UniqueAssetName = CleanBaseName;
-    int32 Counter = 1;
-
-    while (true)
-    {
-        FString TestPackageName = PackagePath + TEXT("/") + UniqueAssetName;
-        
-        // 检查资产注册表中是否存在 - 使用新的API
-        FSoftObjectPath SoftObjectPath(TestPackageName);
-        FAssetData ExistingAsset = AssetRegistry.GetAssetByObjectPath(SoftObjectPath);
-        if (!ExistingAsset.IsValid())
-        {
-            // 再检查磁盘上是否存在
-            FString PackageFileName = FPackageName::LongPackageNameToFilename(TestPackageName, FPackageName::GetAssetPackageExtension());
-            if (!FPaths::FileExists(PackageFileName))
-            {
-                break; // 找到唯一名称
-            }
-        }
-
-        // 生成新的名称
-        UniqueAssetName = FString::Printf(TEXT("%s_%d"), *CleanBaseName, Counter);
-        Counter++;
-    }
-
-    return UniqueAssetName;
-}
-
-bool SComfyUIWidget::SaveTextureToFile(UTexture2D* Texture, const FString& FilePath)
-{
-    if (!Texture)
-    {
-        UE_LOG(LogTemp, Error, TEXT("SaveTextureToFile: Texture is null"));
-        return false;
-    }
-
-    // 确定文件格式
-    FString FileExtension = FPaths::GetExtension(FilePath).ToLower();
-    EImageFormat ImageFormat = EImageFormat::PNG; // 默认PNG
-    
-    if (FileExtension == TEXT("jpg") || FileExtension == TEXT("jpeg"))
-    {
-        ImageFormat = EImageFormat::JPEG;
-    }
-    else if (FileExtension == TEXT("bmp"))
-    {
-        ImageFormat = EImageFormat::BMP;
-    }
-    else if (FileExtension == TEXT("png"))
-    {
-        ImageFormat = EImageFormat::PNG;
-    }
-    else
-    {
-        UE_LOG(LogTemp, Warning, TEXT("SaveTextureToFile: Unsupported format '%s', defaulting to PNG"), *FileExtension);
-        ImageFormat = EImageFormat::PNG;
-    }
-
-    UE_LOG(LogTemp, Log, TEXT("SaveTextureToFile: Saving texture as %s to: %s"), 
-        ImageFormat == EImageFormat::PNG ? TEXT("PNG") : 
-        ImageFormat == EImageFormat::JPEG ? TEXT("JPEG") : TEXT("BMP"), 
-        *FilePath);
-
-    try
-    {
-        // 获取纹理的平台数据
-        FTexturePlatformData* PlatformData = Texture->GetPlatformData();
-        if (!PlatformData || PlatformData->Mips.Num() == 0)
-        {
-            UE_LOG(LogTemp, Error, TEXT("SaveTextureToFile: Texture has no platform data"));
-            return false;
-        }
-
-        // 检查纹理像素格式
-        EPixelFormat PixelFormat = PlatformData->PixelFormat;
-        UE_LOG(LogTemp, Log, TEXT("SaveTextureToFile: Texture pixel format: %d"), (int32)PixelFormat);
-
-        // 获取第一个Mip级别的数据
-        const FTexture2DMipMap& Mip = PlatformData->Mips[0];
-        int32 BulkDataSize = Mip.BulkData.GetBulkDataSize();
-        
-        if (BulkDataSize <= 0)
-        {
-            UE_LOG(LogTemp, Error, TEXT("SaveTextureToFile: Invalid mip data size: %d"), BulkDataSize);
-            return false;
-        }
-
-        int32 Width = Texture->GetSizeX();
-        int32 Height = Texture->GetSizeY();
-        
-        UE_LOG(LogTemp, Log, TEXT("SaveTextureToFile: Texture dimensions: %dx%d, BulkDataSize: %d"), Width, Height, BulkDataSize);
-
-        // 锁定纹理数据
-        const void* TextureData = Mip.BulkData.LockReadOnly();
-        if (!TextureData)
-        {
-            UE_LOG(LogTemp, Error, TEXT("SaveTextureToFile: Could not lock texture data"));
-            return false;
-        }
-
-        // 获取图像包装器模块
-        IImageWrapperModule& ImageWrapperModule = FModuleManager::LoadModuleChecked<IImageWrapperModule>(FName("ImageWrapper"));
-        TSharedPtr<IImageWrapper> ImageWrapper = ImageWrapperModule.CreateImageWrapper(ImageFormat);
-
-        if (!ImageWrapper.IsValid())
-        {
-            UE_LOG(LogTemp, Error, TEXT("SaveTextureToFile: Failed to create image wrapper"));
-            Mip.BulkData.Unlock();
-            return false;
-        }
-
-        bool bSetResult = false;
-
-        // 根据纹理的像素格式选择合适的处理方式
-        if (PixelFormat == PF_B8G8R8A8)
-        {
-            // 标准的BGRA8格式，可以直接使用
-            int32 ExpectedDataSize = Width * Height * 4; // 4 bytes per pixel for BGRA8
-            
-            if (BulkDataSize >= ExpectedDataSize)
-            {
-                bSetResult = ImageWrapper->SetRaw(
-                    TextureData,
-                    ExpectedDataSize,  // 使用计算出的期望大小，而不是BulkData的实际大小
-                    Width,
-                    Height,
-                    ERGBFormat::BGRA,
-                    8
-                );
-            }
-            else
-            {
-                UE_LOG(LogTemp, Error, TEXT("SaveTextureToFile: BulkData size (%d) smaller than expected BGRA8 size (%d)"), BulkDataSize, ExpectedDataSize);
-                Mip.BulkData.Unlock();
-                return false;
-            }
-        }
-        else if (PixelFormat == PF_R8G8B8A8)
-        {
-            // RGBA8格式
-            int32 ExpectedDataSize = Width * Height * 4;
-            
-            if (BulkDataSize >= ExpectedDataSize)
-            {
-                bSetResult = ImageWrapper->SetRaw(
-                    TextureData,
-                    ExpectedDataSize,
-                    Width,
-                    Height,
-                    ERGBFormat::RGBA,
-                    8
-                );
-            }
-            else
-            {
-                UE_LOG(LogTemp, Error, TEXT("SaveTextureToFile: BulkData size (%d) smaller than expected RGBA8 size (%d)"), BulkDataSize, ExpectedDataSize);
-                Mip.BulkData.Unlock();
-                return false;
-            }
-        }
-        else if (PixelFormat == PF_FloatRGBA)
-        {
-            // Float RGBA格式，需要转换为8位
-            int32 ExpectedDataSize = Width * Height * 4 * sizeof(float);
-            
-            if (BulkDataSize >= ExpectedDataSize)
-            {
-                // 创建临时的8位数据缓冲区
-                TArray<uint8> ConvertedData;
-                ConvertedData.SetNum(Width * Height * 4);
-                
-                const float* FloatData = static_cast<const float*>(TextureData);
-                for (int32 i = 0; i < Width * Height * 4; ++i)
-                {
-                    ConvertedData[i] = FMath::Clamp(FMath::RoundToInt(FloatData[i] * 255.0f), 0, 255);
-                }
-                
-                bSetResult = ImageWrapper->SetRaw(
-                    ConvertedData.GetData(),
-                    ConvertedData.Num(),
-                    Width,
-                    Height,
-                    ERGBFormat::RGBA,
-                    8
-                );
-            }
-            else
-            {
-                UE_LOG(LogTemp, Error, TEXT("SaveTextureToFile: BulkData size (%d) smaller than expected FloatRGBA size (%d)"), BulkDataSize, ExpectedDataSize);
-                Mip.BulkData.Unlock();
-                return false;
-            }
-        }
-        else
-        {
-            // 对于其他格式，尝试使用纹理的源数据
-            UE_LOG(LogTemp, Warning, TEXT("SaveTextureToFile: Unsupported pixel format %d, trying to use source data"), (int32)PixelFormat);
-            
-            if (Texture->Source.IsValid())
-            {
-                TArray64<uint8> SourceData;
-                if (Texture->Source.GetMipData(SourceData, 0))
-                {
-                    ETextureSourceFormat SourceFormat = Texture->Source.GetFormat();
-                    int32 SourceWidth = Texture->Source.GetSizeX();
-                    int32 SourceHeight = Texture->Source.GetSizeY();
-                    
-                    // 根据源格式设置相应的参数
-                    ERGBFormat RGBFormat = ERGBFormat::BGRA;
-                    int32 BitDepth = 8;
-                    
-                    if (SourceFormat == TSF_BGRA8)
-                    {
-                        RGBFormat = ERGBFormat::BGRA;
-                        BitDepth = 8;
-                    }
-                    // RBGA8格式已弃用
-                    // else if (SourceFormat == TSF_RGBA8)
-                    // {
-                    //     RGBFormat = ERGBFormat::RGBA;
-                    //     BitDepth = 8;
-                    // }
-                    else if (SourceFormat == TSF_RGBA16)
-                    {
-                        RGBFormat = ERGBFormat::RGBA;
-                        BitDepth = 16;
-                    }
-                    else if (SourceFormat == TSF_RGBA16F)
-                    {
-                        // 16位浮点需要转换为8位
-                        TArray<uint8> ConvertedData;
-                        ConvertedData.SetNum(SourceWidth * SourceHeight * 4);
-                        
-                        const FFloat16* Float16Data = reinterpret_cast<const FFloat16*>(SourceData.GetData());
-                        for (int32 i = 0; i < SourceWidth * SourceHeight * 4; ++i)
-                        {
-                            ConvertedData[i] = FMath::Clamp(FMath::RoundToInt(Float16Data[i].GetFloat() * 255.0f), 0, 255);
-                        }
-                        
-                        bSetResult = ImageWrapper->SetRaw(
-                            ConvertedData.GetData(),
-                            ConvertedData.Num(),
-                            SourceWidth,
-                            SourceHeight,
-                            ERGBFormat::RGBA,
-                            8
-                        );
-                    }
-                    
-                    if (!bSetResult && SourceFormat != TSF_RGBA16F)
-                    {
-                        bSetResult = ImageWrapper->SetRaw(
-                            SourceData.GetData(),
-                            SourceData.Num(),
-                            SourceWidth,
-                            SourceHeight,
-                            RGBFormat,
-                            BitDepth
-                        );
-                    }
-                }
-                else
-                {
-                    UE_LOG(LogTemp, Error, TEXT("SaveTextureToFile: Failed to get source data from texture"));
-                    Mip.BulkData.Unlock();
-                    return false;
-                }
-            }
-            else
-            {
-                UE_LOG(LogTemp, Error, TEXT("SaveTextureToFile: Texture has no source data and unsupported pixel format"));
-                Mip.BulkData.Unlock();
-                return false;
-            }
-        }
-
-        // 解锁纹理数据
-        Mip.BulkData.Unlock();
-
-        if (!bSetResult)
-        {
-            UE_LOG(LogTemp, Error, TEXT("SaveTextureToFile: Failed to set image data in wrapper"));
-            return false;
-        }
-
-        // 获取压缩后的图像数据
-        TArray64<uint8> CompressedData = ImageWrapper->GetCompressed(
-            ImageFormat == EImageFormat::JPEG ? 85 : 100  // JPEG质量85，其他格式100
-        );
-
-        if (CompressedData.Num() == 0)
-        {
-            UE_LOG(LogTemp, Error, TEXT("SaveTextureToFile: Failed to compress image data"));
-            return false;
-        }
-
-        // 确保保存目录存在
-        FString SaveDirectory = FPaths::GetPath(FilePath);
-        IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
-        if (!PlatformFile.DirectoryExists(*SaveDirectory))
-        {
-            if (!PlatformFile.CreateDirectoryTree(*SaveDirectory))
-            {
-                UE_LOG(LogTemp, Error, TEXT("SaveTextureToFile: Failed to create directory: %s"), *SaveDirectory);
-                return false;
-            }
-        }
-
-        // 保存到文件
-        if (FFileHelper::SaveArrayToFile(CompressedData, *FilePath))
-        {
-            UE_LOG(LogTemp, Log, TEXT("SaveTextureToFile: Successfully saved %d bytes to: %s"), 
-                CompressedData.Num(), *FilePath);
-            return true;
-        }
-        else
-        {
-            UE_LOG(LogTemp, Error, TEXT("SaveTextureToFile: Failed to write file: %s"), *FilePath);
-            return false;
-        }
-    }
-    catch (...)
-    {
-        UE_LOG(LogTemp, Error, TEXT("SaveTextureToFile: Exception occurred during file save"));
-        return false;
-    }
-}
-
 void SComfyUIWidget::ShowSaveSuccessNotification(const FString& AssetPath)
 {
     FNotificationInfo Info(FText::Format(
@@ -1977,170 +1323,269 @@ void SComfyUIWidget::ShowSaveErrorNotification(const FString& ErrorMessage)
 void SComfyUIWidget::DetectWorkflowType(const FString& WorkflowName)
 {
     // 默认类型
-    DetectedCustomWorkflowType = EWorkflowType::TextToImage;
+    DetectedCustomWorkflowType = EComfyUIWorkflowType::Unknown;
     
-    if (WorkflowName.IsEmpty())
-    {
-        return;
-    }
+    if (WorkflowName.IsEmpty()) return;
     
-    // 创建ComfyUI客户端来分析工作流
-    UComfyUIClient* Client = NewObject<UComfyUIClient>();
-    if (!Client)
-    {
-        return;
-    }
-    
-    // 构建工作流文件路径
-    FString TemplatesDir = FPaths::ProjectPluginsDir() / TEXT("ComfyUIIntegration/Config/Templates");
-    FString WorkflowFile = TemplatesDir / (WorkflowName + TEXT(".json"));
-    
-    // 检查文件是否存在
-    if (!FPaths::FileExists(WorkflowFile))
-    {
-        UE_LOG(LogTemp, Warning, TEXT("DetectWorkflowType: Workflow file not found: %s"), *WorkflowFile);
-        return;
-    }
-    
-    // 读取并验证工作流文件
-    FString JsonContent;
-    if (!FFileHelper::LoadFileToString(JsonContent, *WorkflowFile))
-    {
-        UE_LOG(LogTemp, Error, TEXT("DetectWorkflowType: Failed to load workflow file: %s"), *WorkflowFile);
-        return;
-    }
-    
-    // 使用ComfyUIClient分析工作流
-    FWorkflowConfig Config;
-    FString ValidationError;
-    
-    if (Client->ValidateWorkflowJson(JsonContent, Config, ValidationError))
-    {
-        // 分析工作流类型
-        DetectedCustomWorkflowType = AnalyzeWorkflowTypeFromConfig(Config);
+    // 使用工作流管理器检测工作流类型
+    UComfyUIWorkflowManager* WorkflowManager = NewObject<UComfyUIWorkflowManager>();
+    DetectedCustomWorkflowType = WorkflowManager->DetectWorkflowType(WorkflowName);
         
-        UE_LOG(LogTemp, Log, TEXT("DetectWorkflowType: Detected workflow type for '%s': %d"), 
-               *WorkflowName, (int32)DetectedCustomWorkflowType);
-    }
-    else
-    {
-        UE_LOG(LogTemp, Warning, TEXT("DetectWorkflowType: Failed to validate workflow '%s': %s"), 
-               *WorkflowName, *ValidationError);
-    }
+    UE_LOG(LogTemp, Log, TEXT("DetectWorkflowType: Detected workflow type for '%s': %d"), 
+           *WorkflowName, (int32)DetectedCustomWorkflowType);
 }
 
-SComfyUIWidget::EWorkflowType SComfyUIWidget::AnalyzeWorkflowTypeFromConfig(const FWorkflowConfig& Config)
+TSharedRef<SWidget> SComfyUIWidget::CreateProgressWidget()
 {
-    // 基于输入输出节点分析工作流类型
-    // 这是一个简化的检测逻辑，实际应用中可能需要更复杂的分析
-    
-    bool bHasTextInput = false;
-    bool bHasImageInput = false;
-    bool bHas3DOutput = false;
-    bool bHasImageOutput = false;
-    bool bHasTextureOutput = false;
-    
-    // 分析必需的输入参数
-    for (const FString& Input : Config.RequiredInputs)
-    {
-        FString LowerInput = Input.ToLower();
+    return SNew(SVerticalBox)
+        .Visibility(this, &SComfyUIWidget::GetProgressVisibility)
         
-        if (LowerInput.Contains(TEXT("prompt")) || 
-            LowerInput.Contains(TEXT("text")) ||
-            LowerInput.Contains(TEXT("positive")))
+        + SVerticalBox::Slot()
+        .AutoHeight()
+        .Padding(0.0f, 2.0f)
+        [
+            SNew(STextBlock)
+            .Text(LOCTEXT("ProgressLabel", "生成进度"))
+            .Font(FCoreStyle::GetDefaultFontStyle("Bold", 12))
+        ]
+
+        + SVerticalBox::Slot()
+        .AutoHeight()
+        .Padding(0.0f, 5.0f)
+        [
+            SAssignNew(GenerationProgressBar, SProgressBar)
+            .Percent(this, &SComfyUIWidget::GetProgressPercent)
+            .BackgroundImage(FAppStyle::GetBrush("ProgressBar.Background"))
+            .FillImage(FAppStyle::GetBrush("ProgressBar.Fill"))
+        ]
+
+        + SVerticalBox::Slot()
+        .AutoHeight()
+        .Padding(0.0f, 2.0f)
+        [
+            SNew(SHorizontalBox)
+            
+            + SHorizontalBox::Slot()
+            .AutoWidth()
+            .VAlign(VAlign_Center)
+            .Padding(0.0f, 0.0f, 10.0f, 0.0f)
+            [
+                SAssignNew(ProgressStatusText, STextBlock)
+                .Text(this, &SComfyUIWidget::GetProgressStatusText)
+                .Font(FCoreStyle::GetDefaultFontStyle("Regular", 10))
+            ]
+
+            + SHorizontalBox::Slot()
+            .AutoWidth()
+            .VAlign(VAlign_Center)
+            [
+                SAssignNew(QueuePositionText, STextBlock)
+                .Text(this, &SComfyUIWidget::GetQueuePositionText)
+                .Font(FCoreStyle::GetDefaultFontStyle("Regular", 10))
+                .ColorAndOpacity(FSlateColor(FLinearColor(0.7f, 0.7f, 0.7f)))
+            ]
+        ]
+
+        + SVerticalBox::Slot()
+        .AutoHeight()
+        .Padding(0.0f, 2.0f)
+        [
+            SAssignNew(CurrentNodeText, STextBlock)
+            .Text(this, &SComfyUIWidget::GetCurrentNodeText)
+            .Font(FCoreStyle::GetDefaultFontStyle("Italic", 9))
+            .ColorAndOpacity(FSlateColor(FLinearColor(0.6f, 0.6f, 0.6f)))
+        ];
+}
+
+EVisibility SComfyUIWidget::GetProgressVisibility() const
+{
+    return bIsGenerating ? EVisibility::Visible : EVisibility::Collapsed;
+}
+
+EVisibility SComfyUIWidget::GetCancelButtonVisibility() const
+{
+    return bIsGenerating ? EVisibility::Visible : EVisibility::Collapsed;
+}
+
+bool SComfyUIWidget::IsGenerateButtonEnabled() const
+{
+    return !bIsGenerating;
+}
+
+TOptional<float> SComfyUIWidget::GetProgressPercent() const
+{
+    return CurrentProgressInfo.ProgressPercentage;
+}
+
+FText SComfyUIWidget::GetProgressStatusText() const
+{
+    return FText::FromString(CurrentProgressInfo.StatusMessage);
+}
+
+FText SComfyUIWidget::GetQueuePositionText() const
+{
+    if (CurrentProgressInfo.QueuePosition > 0)
+    {
+        return FText::Format(LOCTEXT("QueuePosition", "队列位置: {0}"), 
+                           FText::AsNumber(CurrentProgressInfo.QueuePosition));
+    }
+    return FText::GetEmpty();
+}
+
+FText SComfyUIWidget::GetCurrentNodeText() const
+{
+    if (!CurrentProgressInfo.CurrentNodeName.IsEmpty())
+    {
+        return FText::Format(LOCTEXT("CurrentNode", "当前节点: {0}"), 
+                           FText::FromString(CurrentProgressInfo.CurrentNodeName));
+    }
+    return FText::GetEmpty();
+}
+
+FReply SComfyUIWidget::OnCancelClicked()
+{
+    if (bIsGenerating)
+    {
+        // 获取ComfyUI客户端
+        if (UComfyUIClient* Client = NewObject<UComfyUIClient>())
         {
-            bHasTextInput = true;
-        }
-        else if (LowerInput.Contains(TEXT("image")) ||
-                 LowerInput.Contains(TEXT("input_image")) ||
-                 LowerInput.Contains(TEXT("img")))
-        {
-            bHasImageInput = true;
+            Client->CancelCurrentGeneration();
+            
+            // 重置UI状态
+            bIsGenerating = false;
+            CurrentProgressInfo = FComfyUIProgressInfo();
+            
+            UE_LOG(LogTemp, Log, TEXT("Generation cancelled by user"));
         }
     }
     
-    // 分析输出节点
-    for (const FString& Output : Config.OutputNodes)
+    return FReply::Handled();
+}
+
+void SComfyUIWidget::OnGenerationProgressUpdate(const FComfyUIProgressInfo& ProgressInfo)
+{
+    CurrentProgressInfo = ProgressInfo;
+    UE_LOG(LogTemp, VeryVerbose, TEXT("Progress Update: %s - %.1f%% - Queue: %d"), 
+           *ProgressInfo.StatusMessage, ProgressInfo.ProgressPercentage * 100.0f, ProgressInfo.QueuePosition);
+}
+
+void SComfyUIWidget::OnGenerationStarted(const FString& PromptId)
+{
+    bIsGenerating = true;
+    CurrentProgressInfo = FComfyUIProgressInfo(0, 0.0f, TEXT(""), TEXT("开始生成..."), false);
+    UE_LOG(LogTemp, Log, TEXT("Generation started with Prompt ID: %s"), *PromptId);
+}
+
+void SComfyUIWidget::OnGenerationCompleted()
+{
+    bIsGenerating = false;
+    CurrentProgressInfo = FComfyUIProgressInfo();
+    UE_LOG(LogTemp, Log, TEXT("Generation completed"));
+}
+
+// ========== 新的生成完成回调实现 ==========
+
+void SComfyUIWidget::On3DModelGenerationComplete(const TArray<uint8>& ModelData)
+{
+    UE_LOG(LogTemp, Log, TEXT("3D model generation completed: %d bytes"), ModelData.Num());
+    
+    // 恢复UI状态
+    GenerateButton->SetEnabled(true);
+    bIsGenerating = false;
+    
+    if (ModelData.Num() > 0)
     {
-        FString LowerOutput = Output.ToLower();
+        // 保存3D模型到临时位置
+        FString BaseName = FString::Printf(TEXT("ComfyUI_3DModel_%s"), *FDateTime::Now().ToString(TEXT("%Y%m%d_%H%M%S")));
         
-        if (LowerOutput.Contains(TEXT("3d")) ||
-            LowerOutput.Contains(TEXT("mesh")) ||
-            LowerOutput.Contains(TEXT("model")) ||
-            LowerOutput.Contains(TEXT("obj")) ||
-            LowerOutput.Contains(TEXT("ply")))
+        if (UComfyUIFileManager::Save3DModelToProject(ModelData, BaseName))
         {
-            bHas3DOutput = true;
-        }
-        else if (LowerOutput.Contains(TEXT("texture")) ||
-                 LowerOutput.Contains(TEXT("material")) ||
-                 LowerOutput.Contains(TEXT("diffuse")) ||
-                 LowerOutput.Contains(TEXT("normal")))
-        {
-            bHasTextureOutput = true;
-        }
-        else if (LowerOutput.Contains(TEXT("image")) ||
-                 LowerOutput.Contains(TEXT("output")) ||
-                 LowerOutput.Contains(TEXT("save")))
-        {
-            bHasImageOutput = true;
-        }
-    }
-    
-    // 根据工作流名称进行额外的检测
-    FString LowerWorkflowName = Config.Name.ToLower();
-    if (LowerWorkflowName.Contains(TEXT("img2img")) || LowerWorkflowName.Contains(TEXT("image_to_image")))
-    {
-        return EWorkflowType::ImageToImage;
-    }
-    else if (LowerWorkflowName.Contains(TEXT("txt2img")) || LowerWorkflowName.Contains(TEXT("text_to_image")))
-    {
-        return EWorkflowType::TextToImage;
-    }
-    else if (LowerWorkflowName.Contains(TEXT("3d")))
-    {
-        if (bHasImageInput)
-        {
-            return EWorkflowType::ImageTo3D;
+            // 显示成功通知
+            FNotificationInfo Info(FText::Format(
+                LOCTEXT("3DModelGenerationSuccess", "3D模型生成成功！\n已保存为: {0}\n大小: {1} KB"),
+                FText::FromString(BaseName),
+                FText::AsNumber(ModelData.Num() / 1024)
+            ));
+            Info.ExpireDuration = 5.0f;
+            Info.bUseSuccessFailIcons = true;
+            Info.Image = FAppStyle::GetBrush(TEXT("NotificationList.SuccessImage"));
+            FSlateNotificationManager::Get().AddNotification(Info);
         }
         else
         {
-            return EWorkflowType::TextTo3D;
+            ShowSaveErrorNotification(TEXT("无法保存3D模型文件"));
         }
     }
-    else if (LowerWorkflowName.Contains(TEXT("texture")) || LowerWorkflowName.Contains(TEXT("material")))
+    else
     {
-        return EWorkflowType::TextureGeneration;
+        ShowSaveErrorNotification(TEXT("3D模型数据为空"));
     }
+}
+
+void SComfyUIWidget::OnTextureGenerationComplete(UTexture2D* NewGeneratedTexture)
+{
+    UE_LOG(LogTemp, Log, TEXT("Texture generation completed"));
     
-    // 基于输入输出组合进行推断
-    if (bHas3DOutput)
-    {
-        if (bHasImageInput)
-        {
-            return EWorkflowType::ImageTo3D;
-        }
-        else if (bHasTextInput)
-        {
-            return EWorkflowType::TextTo3D;
-        }
-    }
-    else if (bHasTextureOutput)
-    {
-        return EWorkflowType::TextureGeneration;
-    }
-    else if (bHasImageInput && bHasImageOutput)
-    {
-        return EWorkflowType::ImageToImage;
-    }
-    else if (bHasTextInput && bHasImageOutput)
-    {
-        return EWorkflowType::TextToImage;
-    }
+    // 恢复UI状态
+    GenerateButton->SetEnabled(true);
+    bIsGenerating = false;
     
-    // 默认返回未知类型
-    UE_LOG(LogTemp, Warning, TEXT("AnalyzeWorkflowTypeFromConfig: Unable to determine workflow type for config: %s"), *Config.Name);
-    return EWorkflowType::Unknown;
+    if (NewGeneratedTexture)
+    {
+        // 显示生成的纹理
+        GeneratedTexture = NewGeneratedTexture;
+        CurrentImageBrush = MakeShareable(new FSlateBrush());
+        CurrentImageBrush->SetResourceObject(NewGeneratedTexture);
+        CurrentImageBrush->ImageSize = FVector2D(NewGeneratedTexture->GetSizeX(), NewGeneratedTexture->GetSizeY());
+        CurrentImageBrush->DrawAs = ESlateBrushDrawType::Image;
+        
+        if (ImagePreview.IsValid())
+        {
+            ImagePreview->SetImage(CurrentImageBrush.Get());
+        }
+        
+        // 启用保存按钮
+        if (SaveButton.IsValid())
+            SaveButton->SetEnabled(true);
+        if (SaveAsButton.IsValid())
+            SaveAsButton->SetEnabled(true);
+        
+        // 保存纹理到项目
+        FString BaseName = FString::Printf(TEXT("ComfyUI_Texture_%s"), *FDateTime::Now().ToString(TEXT("%Y%m%d_%H%M%S")));
+        
+        if (UComfyUIFileManager::SaveGeneratedTexture(NewGeneratedTexture, BaseName))
+        {
+            // 显示成功通知
+            FNotificationInfo Info(FText::Format(
+                LOCTEXT("TextureGenerationSuccess", "纹理生成成功！\n已保存为: {0}\n尺寸: {1}x{2}"),
+                FText::FromString(BaseName),
+                FText::AsNumber(NewGeneratedTexture->GetSizeX()),
+                FText::AsNumber(NewGeneratedTexture->GetSizeY())
+            ));
+            Info.ExpireDuration = 5.0f;
+            Info.bUseSuccessFailIcons = true;
+            Info.Image = FAppStyle::GetBrush(TEXT("NotificationList.SuccessImage"));
+            FSlateNotificationManager::Get().AddNotification(Info);
+        }
+        else
+        {
+            ShowSaveErrorNotification(TEXT("无法保存纹理文件"));
+        }
+    }
+    else
+    {
+        ShowSaveErrorNotification(TEXT("纹理生成失败"));
+    }
+}
+
+FString SComfyUIWidget::GetSelectedInputImagePath() const
+{
+    // TODO: 实现输入图像路径获取逻辑
+    // 这里可以从输入图像UI组件获取用户选择的图像文件路径
+    // 目前返回空字符串，需要结合具体的图像输入UI实现
+    
+    UE_LOG(LogTemp, Warning, TEXT("GetSelectedInputImagePath: Not yet implemented"));
+    return FString();
 }
 
 #undef LOCTEXT_NAMESPACE

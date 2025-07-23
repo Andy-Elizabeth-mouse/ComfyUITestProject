@@ -50,3 +50,50 @@ struct COMFYUIINTEGRATION_API FComfyUIError
     FComfyUIError(EComfyUIErrorType Type, const FString& Message, int32 StatusCode = 0, const FString& Solution = TEXT(""), bool CanRetry = false)
         : ErrorType(Type), ErrorMessage(Message), HttpStatusCode(StatusCode), SuggestedSolution(Solution), bCanRetry(CanRetry) {}
 };
+
+/**
+ * 生成进度信息结构
+ */
+USTRUCT(BlueprintType)
+struct COMFYUIINTEGRATION_API FComfyUIProgressInfo
+{
+    GENERATED_BODY()
+
+    /** 队列中的位置 (0表示正在执行) */
+    UPROPERTY(BlueprintReadOnly)
+    int32 QueuePosition = 0;
+
+    /** 总体进度百分比 (0.0 - 1.0) */
+    UPROPERTY(BlueprintReadOnly)
+    float ProgressPercentage = 0.0f;
+
+    /** 当前执行的节点名称 */
+    UPROPERTY(BlueprintReadOnly)
+    FString CurrentNodeName;
+
+    /** 当前状态描述 */
+    UPROPERTY(BlueprintReadOnly)
+    FString StatusMessage;
+
+    /** 是否正在执行 */
+    UPROPERTY(BlueprintReadOnly)
+    bool bIsExecuting = false;
+
+    FComfyUIProgressInfo()
+    {
+        QueuePosition = 0;
+        ProgressPercentage = 0.0f;
+        CurrentNodeName = TEXT("");
+        StatusMessage = TEXT("等待中...");
+        bIsExecuting = false;
+    }
+
+    FComfyUIProgressInfo(int32 InQueuePosition, float InProgressPercentage, const FString& InCurrentNodeName, const FString& InStatusMessage, bool InbIsExecuting)
+        : QueuePosition(InQueuePosition)
+        , ProgressPercentage(InProgressPercentage)
+        , CurrentNodeName(InCurrentNodeName)
+        , StatusMessage(InStatusMessage)
+        , bIsExecuting(InbIsExecuting)
+    {
+    }
+};

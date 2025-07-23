@@ -45,6 +45,54 @@
             "template": "img2img.json"
         },
         {
+            "name": "Text to 3D Model",
+            "type": "text_to_3d",
+            "description": "Generate 3D models from text descriptions",
+            "parameters": {
+                "guidance_scale": 7.5,
+                "num_inference_steps": 50,
+                "output_format": "glb",
+                "texture_resolution": 1024,
+                "generate_textures": true
+            },
+            "template": "text_to_3d.json"
+        },
+        {
+            "name": "Image to 3D Model",
+            "type": "image_to_3d",
+            "description": "Generate 3D models from input images",
+            "parameters": {
+                "strength": 0.8,
+                "guidance_scale": 7.5,
+                "num_inference_steps": 40,
+                "output_format": "glb",
+                "texture_size": 1024,
+                "mesh_resolution": "high",
+                "optimize_for_game": true,
+                "generate_lods": true
+            },
+            "template": "image_to_3d.json"
+        },
+        {
+            "name": "PBR Texture Generation",
+            "type": "texture_generation",
+            "description": "Generate complete PBR texture sets (diffuse, normal, roughness, metallic, AO)",
+            "parameters": {
+                "width": 1024,
+                "height": 1024,
+                "guidance_scale": 7.5,
+                "num_inference_steps": 30,
+                "generate_normal": true,
+                "generate_roughness": true,
+                "generate_metallic": true,
+                "generate_ao": true,
+                "seamless": true,
+                "format": "png",
+                "quality": 95
+            },
+            "template": "texture_generation.json"
+        },
+        {
             "name": "High-Resolution Upscale",
             "type": "upscale",
             "description": "Upscale images to higher resolution with AI enhancement",

@@ -61,7 +61,7 @@ CMakeLists.txt.user
 *.xcworkspace
 
 # Other
-/Releases/
+/Releases
 # Uncomment to ignore crash reports and dumps
 # Saved/Crashes/
 # Saved/DumpBacktraces.log

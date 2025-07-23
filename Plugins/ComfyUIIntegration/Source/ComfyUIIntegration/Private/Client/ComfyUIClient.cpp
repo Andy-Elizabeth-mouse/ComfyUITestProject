@@ -1,4 +1,6 @@
 #include "Client/ComfyUIClient.h"
+#include "Utils/ComfyUIFileManager.h"
+#include "Workflow/ComfyUIWorkflowService.h"
 #include "HttpModule.h"
 #include "Interfaces/IHttpRequest.h"
 #include "Interfaces/IHttpResponse.h"
@@ -21,16 +23,35 @@ UComfyUIClient::UComfyUIClient()
 {
     HttpModule = &FHttpModule::Get();
     // 初始化网络管理器，用于封装 HTTP 请求
-    NetworkManager = NewObject<UComfyUINetworkManager>(this);
+    // 注意：在默认构造函数中不能创建默认子对象，需要使用带ObjectInitializer的构造函数
+    NetworkManager = nullptr;
     ServerUrl = TEXT("http://127.0.0.1:8188");
     WorldContext = nullptr;
-    InitializeWorkflowConfigs();
-    LoadWorkflowConfigs();
+}
+
+UComfyUIClient::UComfyUIClient(const FObjectInitializer& ObjectInitializer)
+    : Super(ObjectInitializer)
+{
+    HttpModule = &FHttpModule::Get();
+    // 使用ObjectInitializer创建默认子对象
+    NetworkManager = ObjectInitializer.CreateDefaultSubobject<UComfyUINetworkManager>(this, TEXT("NetworkManager"));
+    ServerUrl = TEXT("http://127.0.0.1:8188");
+    WorldContext = nullptr;
 }
 
 void UComfyUIClient::SetWorldContext(UWorld* InWorld)
 {
     WorldContext = InWorld;
+}
+
+void UComfyUIClient::EnsureNetworkManagerInitialized()
+{
+    if (!NetworkManager)
+    {
+        // 如果使用了默认构造函数，需要在这里创建NetworkManager
+        NetworkManager = NewObject<UComfyUINetworkManager>(this);
+        UE_LOG(LogTemp, Warning, TEXT("NetworkManager was created using NewObject - this should be done via ObjectInitializer in constructor"));
+    }
 }
 
 void UComfyUIClient::SetServerUrl(const FString& Url)
@@ -53,20 +74,24 @@ void UComfyUIClient::SetRequestTimeout(float TimeoutSeconds)
     UE_LOG(LogTemp, Log, TEXT("Set request timeout: %.2fs"), RequestTimeoutSeconds);
 }
 
-void UComfyUIClient::InitializeWorkflowConfigs()
-{
-    // 清空硬编码的工作流配置，改为完全依赖动态加载
-    WorkflowConfigs.Empty();
-    
-    UE_LOG(LogTemp, Log, TEXT("Initialized empty workflow configs - will load custom workflows from files"));
-}
-
 void UComfyUIClient::GenerateImage(const FString& Prompt, const FString& NegativePrompt, 
                                   EComfyUIWorkflowType WorkflowType, 
-                                  const FOnImageGenerated& OnComplete)
+                                  const FOnImageGenerated& OnComplete,
+                                  const FOnGenerationProgress& OnProgress,
+                                  const FOnGenerationStarted& OnStarted,
+                                  const FOnGenerationCompleted& OnCompleted)
 {
     // 现在所有工作流都是自定义的，直接调用自定义工作流生成
-    if (CustomWorkflowConfigs.Num() == 0)
+    UComfyUIWorkflowService* WorkflowService = UComfyUIWorkflowService::Get();
+    if (!WorkflowService)
+    {
+        UE_LOG(LogTemp, Error, TEXT("WorkflowService not available"));
+        OnComplete.ExecuteIfBound(nullptr);
+        return;
+    }
+
+    TArray<FString> AvailableWorkflows = WorkflowService->GetAvailableWorkflowNames();
+    if (AvailableWorkflows.Num() == 0)
     {
         UE_LOG(LogTemp, Error, TEXT("No custom workflows available. Please import a ComfyUI workflow first."));
         OnComplete.ExecuteIfBound(nullptr);
@@ -74,17 +99,26 @@ void UComfyUIClient::GenerateImage(const FString& Prompt, const FString& Negativ
     }
     
     // 使用第一个可用的自定义工作流
-    FString DefaultWorkflowName = CustomWorkflowConfigs[0].Name;
+    FString DefaultWorkflowName = AvailableWorkflows[0];
     UE_LOG(LogTemp, Warning, TEXT("Using default custom workflow: %s"), *DefaultWorkflowName);
     
-    GenerateImageWithCustomWorkflow(Prompt, NegativePrompt, DefaultWorkflowName, OnComplete);
+    GenerateImageWithCustomWorkflow(Prompt, NegativePrompt, DefaultWorkflowName, OnComplete, OnProgress, OnStarted, OnCompleted);
 }
 
 void UComfyUIClient::GenerateImageWithCustomWorkflow(const FString& Prompt, const FString& NegativePrompt,
                                                      const FString& CustomWorkflowName,
-                                                     const FOnImageGenerated& OnComplete)
+                                                     const FOnImageGenerated& OnComplete,
+                                                     const FOnGenerationProgress& OnProgress,
+                                                     const FOnGenerationStarted& OnStarted,
+                                                     const FOnGenerationCompleted& OnCompleted)
 {
     OnImageGeneratedCallback = OnComplete;
+    OnGenerationProgressCallback = OnProgress;
+    OnGenerationStartedCallback = OnStarted;
+    OnGenerationCompletedCallback = OnCompleted;
+    
+    // 重置取消状态
+    bIsCancelled = false;
     
     // 保存当前操作上下文
     CurrentPrompt = Prompt;
@@ -95,10 +129,20 @@ void UComfyUIClient::GenerateImageWithCustomWorkflow(const FString& Prompt, cons
     // 重置重试状态
     ResetRetryState();
 
-    // 构建自定义工作流JSON
-    FString WorkflowJson = BuildCustomWorkflowJson(Prompt, NegativePrompt, CustomWorkflowName);
+    // 使用工作流服务构建自定义工作流JSON
+    UComfyUIWorkflowService* WorkflowService = UComfyUIWorkflowService::Get();
+    if (!WorkflowService)
+    {
+        FComfyUIError Error(EComfyUIErrorType::InvalidWorkflow, 
+                           TEXT("工作流服务不可用"));
+        OnImageGenerationFailedCallback.ExecuteIfBound(Error, false);
+        OnImageGeneratedCallback.ExecuteIfBound(nullptr);
+        return;
+    }
+
+    FString WorkflowJson = WorkflowService->BuildWorkflowJson(CustomWorkflowName, Prompt, NegativePrompt);
     
-    if (WorkflowJson.IsEmpty())
+    if (WorkflowJson.IsEmpty() || WorkflowJson == TEXT("{}"))
     {
         FComfyUIError Error(EComfyUIErrorType::InvalidWorkflow, 
                            FString::Printf(TEXT("无法构建自定义工作流JSON: %s"), *CustomWorkflowName));
@@ -110,6 +154,8 @@ void UComfyUIClient::GenerateImageWithCustomWorkflow(const FString& Prompt, cons
     // 使用 NetworkManager 发送请求
     FString Url = ServerUrl + TEXT("/prompt");
     UE_LOG(LogTemp, Log, TEXT("GenerateImageWithCustomWorkflow: Sending prompt via NetworkManager to %s"), *Url);
+    
+    EnsureNetworkManagerInitialized();
     NetworkManager->SendRequest(Url, WorkflowJson,
         [this](const FString& ResponseContent, bool bSuccess)
         {
@@ -122,6 +168,7 @@ void UComfyUIClient::GenerateImageWithCustomWorkflow(const FString& Prompt, cons
 void UComfyUIClient::CheckServerStatus()
 {
     // 使用 NetworkManager 检查服务器状态
+    EnsureNetworkManagerInitialized();
     if (NetworkManager)
     {
         FString StatusUrl = ServerUrl + TEXT("/system_stats");
@@ -146,190 +193,22 @@ void UComfyUIClient::CheckServerStatus()
 
 void UComfyUIClient::GetAvailableWorkflows()
 {
-    // 刷新工作流列表
-    LoadWorkflowConfigs();
+    // 工作流列表现在通过工作流服务管理
+    UComfyUIWorkflowService* WorkflowService = UComfyUIWorkflowService::Get();
+    if (WorkflowService)
+    {
+        WorkflowService->RefreshWorkflows();
+    }
 }
 
 TArray<FString> UComfyUIClient::GetAvailableWorkflowNames() const
 {
-    TArray<FString> WorkflowNames;
-    
-    // 添加预定义工作流
-    for (const auto& Workflow : WorkflowConfigs)
+    UComfyUIWorkflowService* WorkflowService = UComfyUIWorkflowService::Get();
+    if (WorkflowService)
     {
-        WorkflowNames.Add(Workflow.Value.Name);
+        return WorkflowService->GetAvailableWorkflowNames();
     }
-    
-    // 添加自定义工作流
-    for (const auto& CustomWorkflow : CustomWorkflowConfigs)
-    {
-        WorkflowNames.Add(CustomWorkflow.Name);
-    }
-    
-    return WorkflowNames;
-}
-
-FString UComfyUIClient::BuildWorkflowJson(const FString& Prompt, const FString& NegativePrompt, 
-                                         EComfyUIWorkflowType WorkflowType)
-{
-    // 创建请求JSON对象
-    TSharedPtr<FJsonObject> RequestJson = MakeShareable(new FJsonObject);
-    RequestJson->SetStringField(TEXT("client_id"), TEXT("unreal_engine_plugin"));
-
-    // 获取工作流配置
-    FWorkflowConfig* Config = WorkflowConfigs.Find(WorkflowType);
-    if (!Config)
-    {
-        UE_LOG(LogTemp, Error, TEXT("Workflow type not found"));
-        return TEXT("{}");
-    }
-
-    // 解析工作流模板
-    TSharedPtr<FJsonObject> WorkflowJson;
-    TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Config->JsonTemplate);
-    if (!FJsonSerializer::Deserialize(Reader, WorkflowJson))
-    {
-        UE_LOG(LogTemp, Error, TEXT("Failed to parse workflow template"));
-        return TEXT("{}");
-    }
-
-    // 替换模板中的占位符
-    FString WorkflowString;
-    TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&WorkflowString);
-    FJsonSerializer::Serialize(WorkflowJson.ToSharedRef(), Writer);
-
-    // 替换提示词占位符
-    WorkflowString = WorkflowString.Replace(TEXT("{POSITIVE_PROMPT}"), *Prompt);
-    WorkflowString = WorkflowString.Replace(TEXT("{NEGATIVE_PROMPT}"), *NegativePrompt);
-
-    // 重新解析以确保JSON有效
-    TSharedPtr<FJsonObject> FinalWorkflowJson;
-    TSharedRef<TJsonReader<>> FinalReader = TJsonReaderFactory<>::Create(WorkflowString);
-    if (FJsonSerializer::Deserialize(FinalReader, FinalWorkflowJson))
-    {
-        RequestJson->SetObjectField(TEXT("prompt"), FinalWorkflowJson);
-    }
-
-    // 序列化最终的请求JSON
-    FString OutputString;
-    TSharedRef<TJsonWriter<>> OutputWriter = TJsonWriterFactory<>::Create(&OutputString);
-    FJsonSerializer::Serialize(RequestJson.ToSharedRef(), OutputWriter);
-
-    return OutputString;
-}
-
-FString UComfyUIClient::BuildCustomWorkflowJson(const FString& Prompt, const FString& NegativePrompt,
-                                               const FString& CustomWorkflowName)
-{
-    // 首先查找自定义工作流配置
-    FWorkflowConfig* CustomConfig = nullptr;
-    for (FWorkflowConfig& Config : CustomWorkflowConfigs)
-    {
-        if (Config.Name == CustomWorkflowName)
-        {
-            CustomConfig = &Config;
-            break;
-        }
-    }
-    
-    if (!CustomConfig)
-    {
-        UE_LOG(LogTemp, Error, TEXT("Custom workflow not found: %s"), *CustomWorkflowName);
-        return TEXT("{}");
-    }
-    
-    // 创建请求JSON对象
-    TSharedPtr<FJsonObject> RequestJson = MakeShareable(new FJsonObject);
-    RequestJson->SetStringField(TEXT("client_id"), TEXT("unreal_engine_plugin"));
-
-    // 如果有模板内容，使用模板
-    FString WorkflowTemplate;
-    if (!CustomConfig->JsonTemplate.IsEmpty())
-    {
-        WorkflowTemplate = CustomConfig->JsonTemplate;
-        UE_LOG(LogTemp, Log, TEXT("BuildCustomWorkflowJson: Using cached template content"));
-    }
-    else if (!CustomConfig->TemplateFile.IsEmpty())
-    {
-        // 确保使用绝对路径
-        FString TemplateFilePath = CustomConfig->TemplateFile;
-        if (!FPaths::IsRelative(TemplateFilePath))
-        {
-            // 已经是绝对路径
-        }
-        else
-        {
-            // 相对路径，需要构造完整路径
-            FString PluginDir = FPaths::ProjectPluginsDir() / TEXT("ComfyUIIntegration");
-            FString TemplatesDir = PluginDir / TEXT("Config") / TEXT("Templates");
-            TemplateFilePath = TemplatesDir / TemplateFilePath;
-        }
-        
-        UE_LOG(LogTemp, Log, TEXT("BuildCustomWorkflowJson: Loading template from file: %s"), *TemplateFilePath);
-        
-        // 从文件加载模板
-        if (!FFileHelper::LoadFileToString(WorkflowTemplate, *TemplateFilePath))
-        {
-            UE_LOG(LogTemp, Error, TEXT("Failed to load workflow template file: %s"), *TemplateFilePath);
-            return TEXT("{}");
-        }
-        
-        // 缓存模板内容以供下次使用
-        CustomConfig->JsonTemplate = WorkflowTemplate;
-    }
-    else
-    {
-        UE_LOG(LogTemp, Error, TEXT("No template found for custom workflow: %s"), *CustomWorkflowName);
-        return TEXT("{}");
-    }
-
-    // 解析工作流模板
-    TSharedPtr<FJsonObject> WorkflowJson;
-    TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(WorkflowTemplate);
-    if (!FJsonSerializer::Deserialize(Reader, WorkflowJson))
-    {
-        UE_LOG(LogTemp, Error, TEXT("Failed to parse custom workflow template: %s"), *CustomWorkflowName);
-        return TEXT("{}");
-    }
-
-    // 替换模板中的占位符
-    FString WorkflowString;
-    TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&WorkflowString);
-    FJsonSerializer::Serialize(WorkflowJson.ToSharedRef(), Writer);
-
-    // 替换提示词占位符
-    WorkflowString = WorkflowString.Replace(TEXT("{POSITIVE_PROMPT}"), *Prompt);
-    WorkflowString = WorkflowString.Replace(TEXT("{NEGATIVE_PROMPT}"), *NegativePrompt);
-    
-    // 替换其他自定义参数
-    for (const auto& Param : CustomConfig->Parameters)
-    {
-        FString Placeholder = FString::Printf(TEXT("{%s}"), *Param.Key.ToUpper());
-        WorkflowString = WorkflowString.Replace(*Placeholder, *Param.Value);
-    }
-
-    // 重新解析以确保JSON有效
-    TSharedPtr<FJsonObject> FinalWorkflowJson;
-    TSharedRef<TJsonReader<>> FinalReader = TJsonReaderFactory<>::Create(WorkflowString);
-    if (FJsonSerializer::Deserialize(FinalReader, FinalWorkflowJson))
-    {
-        RequestJson->SetObjectField(TEXT("prompt"), FinalWorkflowJson);
-    }
-    else
-    {
-        UE_LOG(LogTemp, Error, TEXT("Failed to deserialize final workflow JSON"));
-        return TEXT("{}");
-    }
-
-    // 序列化最终的请求JSON
-    FString OutputString;
-    TSharedRef<TJsonWriter<>> OutputWriter = TJsonWriterFactory<>::Create(&OutputString);
-    FJsonSerializer::Serialize(RequestJson.ToSharedRef(), OutputWriter);
-
-    UE_LOG(LogTemp, Log, TEXT("BuildCustomWorkflowJson: Final JSON being sent to ComfyUI:"));
-    UE_LOG(LogTemp, Log, TEXT("%s"), *OutputString);
-
-    return OutputString;
+    return TArray<FString>();
 }
 
 void UComfyUIClient::OnPromptSubmitted(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful)
@@ -380,6 +259,7 @@ void UComfyUIClient::OnPromptSubmitted(FHttpRequestPtr Request, FHttpResponsePtr
 void UComfyUIClient::PollGenerationStatus(const FString& PromptId)
 {
     // 使用 NetworkManager 进行状态轮询
+    EnsureNetworkManagerInitialized();
     if (NetworkManager)
     {
         NetworkManager->PollQueueStatus(ServerUrl, PromptId, 
@@ -428,6 +308,16 @@ void UComfyUIClient::OnQueueStatusChecked(const FString& ResponseContent, bool b
     }
 
     UE_LOG(LogTemp, Log, TEXT("Queue status response: %s"), *ResponseContent);
+    
+    // 解析队列状态并更新进度
+    FComfyUIProgressInfo ProgressInfo = ParseQueueStatus(ResponseContent);
+    OnGenerationProgressCallback.ExecuteIfBound(ProgressInfo);
+    
+    // 如果任务被取消，停止处理
+    if (bIsCancelled)
+    {
+        return;
+    }
     
     // 解析响应检查是否完成
     TSharedPtr<FJsonObject> JsonObject;
@@ -536,7 +426,7 @@ void UComfyUIClient::OnImageDownloaded(const TArray<uint8>& ImageData, bool bWas
     }
     
     // 创建纹理
-    UTexture2D* GeneratedTexture = CreateTextureFromImageData(ImageData);
+    UTexture2D* GeneratedTexture = UComfyUIFileManager::CreateTextureFromImageData(ImageData);
     
     if (GeneratedTexture)
     {
@@ -545,6 +435,11 @@ void UComfyUIClient::OnImageDownloaded(const TArray<uint8>& ImageData, bool bWas
                
         // 成功完成，重置重试状态
         ResetRetryState();
+        
+        // 通知生成完成
+        OnGenerationCompletedCallback.ExecuteIfBound();
+        
+        // 最后通知图像生成完成
         OnImageGeneratedCallback.ExecuteIfBound(GeneratedTexture);
     }
     else
@@ -553,6 +448,221 @@ void UComfyUIClient::OnImageDownloaded(const TArray<uint8>& ImageData, bool bWas
                                  TEXT("无法从图像数据创建纹理"), 
                                  0,
                                  TEXT("检查图像格式是否支持，或尝试重新生成"), true);
+        HandleRequestError(TextureError, [this]() { RetryCurrentOperation(); });
+    }
+}
+
+// ========== 新的3D和纹理生成方法实现 ==========
+
+void UComfyUIClient::Generate3DModel(const FString& Prompt, const FString& NegativePrompt,
+                                     const FOn3DModelGenerated& OnComplete,
+                                     const FOnGenerationProgress& OnProgress,
+                                     const FOnGenerationStarted& OnStarted,
+                                     const FOnGenerationCompleted& OnCompleted)
+{
+    UE_LOG(LogTemp, Log, TEXT("Starting 3D model generation with prompt: %s"), *Prompt);
+    
+    // 设置回调
+    On3DModelGeneratedCallback = OnComplete;
+    OnGenerationProgressCallback = OnProgress;
+    OnGenerationStartedCallback = OnStarted;
+    OnGenerationCompletedCallback = OnCompleted;
+    
+    // 设置生成类型
+    CurrentGenerationType = EGenerationType::Model3D;
+    
+    // 开始生成
+    StartGeneration(EComfyUIWorkflowType::TextTo3D, Prompt, NegativePrompt);
+}
+
+void UComfyUIClient::Generate3DModelFromImage(const FString& Prompt, const FString& NegativePrompt,
+                                             const FString& InputImagePath,
+                                             const FOn3DModelGenerated& OnComplete,
+                                             const FOnGenerationProgress& OnProgress,
+                                             const FOnGenerationStarted& OnStarted,
+                                             const FOnGenerationCompleted& OnCompleted)
+{
+    UE_LOG(LogTemp, Log, TEXT("Starting image-to-3D generation with prompt: %s, image: %s"), *Prompt, *InputImagePath);
+    
+    // 验证输入图像文件存在
+    if (!FPaths::FileExists(InputImagePath))
+    {
+        UE_LOG(LogTemp, Error, TEXT("Input image file does not exist: %s"), *InputImagePath);
+        FComfyUIError ImageError(EComfyUIErrorType::InvalidWorkflow,
+                               FString::Printf(TEXT("输入图像文件不存在: %s"), *InputImagePath),
+                               0,
+                               TEXT("请检查图像文件路径是否正确"));
+        OnComplete.ExecuteIfBound(TArray<uint8>());
+        return;
+    }
+    
+    // 设置回调
+    On3DModelGeneratedCallback = OnComplete;
+    OnGenerationProgressCallback = OnProgress;
+    OnGenerationStartedCallback = OnStarted;
+    OnGenerationCompletedCallback = OnCompleted;
+    
+    // 设置生成类型
+    CurrentGenerationType = EGenerationType::Model3D;
+    
+    // 开始生成
+    StartGeneration(EComfyUIWorkflowType::ImageTo3D, Prompt, NegativePrompt, InputImagePath);
+}
+
+void UComfyUIClient::GeneratePBRTextures(const FString& Prompt, const FString& NegativePrompt,
+                                         const FOnTextureGenerated& OnComplete,
+                                         const FOnGenerationProgress& OnProgress,
+                                         const FOnGenerationStarted& OnStarted,
+                                         const FOnGenerationCompleted& OnCompleted)
+{
+    UE_LOG(LogTemp, Log, TEXT("Starting PBR texture generation with prompt: %s"), *Prompt);
+    
+    // 设置回调
+    OnTextureGeneratedCallback = OnComplete;
+    OnGenerationProgressCallback = OnProgress;
+    OnGenerationStartedCallback = OnStarted;
+    OnGenerationCompletedCallback = OnCompleted;
+    
+    // 设置生成类型
+    CurrentGenerationType = EGenerationType::PBRTextures;
+    
+    // 开始生成
+    StartGeneration(EComfyUIWorkflowType::TextureGeneration, Prompt, NegativePrompt);
+}
+
+void UComfyUIClient::StartGeneration(EComfyUIWorkflowType WorkflowType, const FString& Prompt, const FString& NegativePrompt, const FString& InputImagePath)
+{
+    // 保存当前生成参数
+    CurrentPrompt = Prompt;
+    CurrentNegativePrompt = NegativePrompt;
+    CurrentWorkflowType = WorkflowType;
+    CurrentInputImagePath = InputImagePath;
+    
+    // 重置重试状态
+    ResetRetryState();
+    
+    // 根据工作流类型选择合适的模板
+    FString WorkflowName;
+    switch (WorkflowType)
+    {
+    case EComfyUIWorkflowType::TextTo3D:
+        WorkflowName = TEXT("text_to_3d");
+        break;
+    case EComfyUIWorkflowType::ImageTo3D:
+        WorkflowName = TEXT("image_to_3d");
+        break;
+    case EComfyUIWorkflowType::TextureGeneration:
+        WorkflowName = TEXT("texture_generation");
+        break;
+    default:
+        UE_LOG(LogTemp, Error, TEXT("Unsupported workflow type for this generation method"));
+        return;
+    }
+    
+    // 使用自定义工作流生成
+    GenerateImageWithCustomWorkflow(Prompt, NegativePrompt, WorkflowName,
+        FOnImageGenerated(), // 不使用图像回调
+        OnGenerationProgressCallback,
+        OnGenerationStartedCallback,
+        OnGenerationCompletedCallback
+    );
+}
+
+void UComfyUIClient::OnDataDownloaded(const TArray<uint8>& Data, bool bWasSuccessful)
+{
+    if (!bWasSuccessful)
+    {
+        FComfyUIError DownloadError(EComfyUIErrorType::ImageDownloadFailed,
+                                  TEXT("数据下载失败"),
+                                  0,
+                                  TEXT("检查服务器状态，数据可能已生成但下载失败"), true);
+        HandleRequestError(DownloadError, [this]() { 
+            RetryCurrentOperation(); 
+        });
+        return;
+    }
+    
+    UE_LOG(LogTemp, Log, TEXT("Downloaded data: %d bytes, type: %d"), Data.Num(), (int32)CurrentGenerationType);
+    
+    if (Data.Num() == 0)
+    {
+        FComfyUIError EmptyDataError(EComfyUIErrorType::ImageDownloadFailed,
+                                   TEXT("下载的数据为空"),
+                                   0,
+                                   TEXT("检查生成的数据是否有效"), true);
+        HandleRequestError(EmptyDataError, [this]() { RetryCurrentOperation(); });
+        return;
+    }
+    
+    // 根据当前生成类型处理数据
+    switch (CurrentGenerationType)
+    {
+    case EGenerationType::Image:
+        ProcessImageData(Data);
+        break;
+    case EGenerationType::Model3D:
+        Process3DModelData(Data);
+        break;
+    case EGenerationType::PBRTextures:
+        // TODO: 实现PBR纹理数据处理
+        ProcessPBRTextureData(Data, TEXT("diffuse"));
+        break;
+    default:
+        UE_LOG(LogTemp, Warning, TEXT("Unknown generation type, treating as image"));
+        ProcessImageData(Data);
+        break;
+    }
+}
+
+void UComfyUIClient::ProcessImageData(const TArray<uint8>& ImageData)
+{
+    // 使用原有的图像处理逻辑
+    OnImageDownloaded(ImageData, true);
+}
+
+void UComfyUIClient::Process3DModelData(const TArray<uint8>& ModelData)
+{
+    UE_LOG(LogTemp, Log, TEXT("Processing 3D model data: %d bytes"), ModelData.Num());
+    
+    // 验证模型数据格式（假设为GLB格式）
+    if (!UComfyUIFileManager::ValidateF3DFormat(ModelData, EComfyUI3DFormat::GLB))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("3D model format validation failed, proceeding anyway"));
+    }
+    
+    // 成功完成，重置重试状态
+    ResetRetryState();
+    
+    // 通知生成完成
+    OnGenerationCompletedCallback.ExecuteIfBound();
+    
+    // 通知3D模型生成完成
+    On3DModelGeneratedCallback.ExecuteIfBound(ModelData);
+}
+
+void UComfyUIClient::ProcessPBRTextureData(const TArray<uint8>& TextureData, const FString& TextureType)
+{
+    UE_LOG(LogTemp, Log, TEXT("Processing PBR texture data (%s): %d bytes"), *TextureType, TextureData.Num());
+    
+    // 简化处理，创建单个纹理
+    UTexture2D* GeneratedTexture = UComfyUIFileManager::CreateTextureFromImageData(TextureData);
+    if (GeneratedTexture)
+    {
+        // 成功完成，重置重试状态
+        ResetRetryState();
+        
+        // 通知生成完成
+        OnGenerationCompletedCallback.ExecuteIfBound();
+        
+        // 通知纹理生成完成
+        OnTextureGeneratedCallback.ExecuteIfBound(GeneratedTexture);
+    }
+    else
+    {
+        FComfyUIError TextureError(EComfyUIErrorType::ImageDownloadFailed,
+                                 TEXT("无法从纹理数据创建纹理"),
+                                 0,
+                                 TEXT("检查纹理格式是否支持"), true);
         HandleRequestError(TextureError, [this]() { RetryCurrentOperation(); });
     }
 }
@@ -637,153 +747,6 @@ UTexture2D* UComfyUIClient::CreateTextureFromImageData(const TArray<uint8>& Imag
     return nullptr;
 }
 
-void UComfyUIClient::LoadWorkflowConfigs()
-{
-    // 获取插件配置目录
-    FString PluginDir = FPaths::ProjectPluginsDir() / TEXT("ComfyUIIntegration");
-    FString ConfigPath = PluginDir / TEXT("Config") / TEXT("default_config.json");
-    
-    // 检查配置文件是否存在
-    if (!FPaths::FileExists(ConfigPath))
-    {
-        UE_LOG(LogTemp, Warning, TEXT("Config file not found: %s"), *ConfigPath);
-        return;
-    }
-    
-    // 读取配置文件
-    FString ConfigContent;
-    if (!FFileHelper::LoadFileToString(ConfigContent, *ConfigPath))
-    {
-        UE_LOG(LogTemp, Error, TEXT("Failed to load config file: %s"), *ConfigPath);
-        return;
-    }
-    
-    // 解析JSON配置
-    TSharedPtr<FJsonObject> ConfigJson;
-    TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ConfigContent);
-    if (!FJsonSerializer::Deserialize(Reader, ConfigJson))
-    {
-        UE_LOG(LogTemp, Error, TEXT("Failed to parse config JSON"));
-        return;
-    }
-    
-    // 读取服务器设置
-    if (ConfigJson->HasField(TEXT("server_settings")))
-    {
-        TSharedPtr<FJsonObject> ServerSettings = ConfigJson->GetObjectField(TEXT("server_settings"));
-        if (ServerSettings->HasField(TEXT("default_url")))
-        {
-            ServerUrl = ServerSettings->GetStringField(TEXT("default_url"));
-        }
-    }
-    
-    // 读取工作流配置
-    if (ConfigJson->HasField(TEXT("workflows")))
-    {
-        const TArray<TSharedPtr<FJsonValue>>* WorkflowArray;
-        if (ConfigJson->TryGetArrayField(TEXT("workflows"), WorkflowArray))
-        {
-            for (const auto& WorkflowValue : *WorkflowArray)
-            {
-                TSharedPtr<FJsonObject> WorkflowObj = WorkflowValue->AsObject();
-                if (WorkflowObj.IsValid())
-                {
-                    FWorkflowConfig CustomConfig;
-                    CustomConfig.Name = WorkflowObj->GetStringField(TEXT("name"));
-                    CustomConfig.Type = WorkflowObj->GetStringField(TEXT("type"));
-                    CustomConfig.Description = WorkflowObj->GetStringField(TEXT("description"));
-                    
-                    // 读取模板文件路径
-                    if (WorkflowObj->HasField(TEXT("template")))
-                    {
-                        CustomConfig.TemplateFile = WorkflowObj->GetStringField(TEXT("template"));
-                    }
-                    
-                    // 读取参数
-                    if (WorkflowObj->HasField(TEXT("parameters")))
-                    {
-                        TSharedPtr<FJsonObject> ParamsObj = WorkflowObj->GetObjectField(TEXT("parameters"));
-                        for (auto& Param : ParamsObj->Values)
-                        {
-                            FString ValueStr;
-                            if (Param.Value->TryGetString(ValueStr))
-                            {
-                                CustomConfig.Parameters.Add(Param.Key, ValueStr);
-                            }
-                            else if (Param.Value->Type == EJson::Number)
-                            {
-                                double NumValue = Param.Value->AsNumber();
-                                CustomConfig.Parameters.Add(Param.Key, FString::SanitizeFloat(NumValue));
-                            }
-                            else if (Param.Value->Type == EJson::Boolean)
-                            {
-                                bool BoolValue = Param.Value->AsBool();
-                                CustomConfig.Parameters.Add(Param.Key, BoolValue ? TEXT("true") : TEXT("false"));
-                            }
-                        }
-                    }
-                    
-                    CustomWorkflowConfigs.Add(CustomConfig);
-                    UE_LOG(LogTemp, Log, TEXT("Loaded custom workflow: %s"), *CustomConfig.Name);
-                }
-            }
-        }
-    }
-    
-    // 加载工作流模板目录中的额外工作流
-    FString TemplatesDir = PluginDir / TEXT("Config") / TEXT("Templates");
-    if (FPaths::DirectoryExists(TemplatesDir))
-    {
-        TArray<FString> TemplateFiles;
-        IFileManager::Get().FindFiles(TemplateFiles, *(TemplatesDir / TEXT("*.json")), true, false);
-        
-        for (const FString& TemplateFile : TemplateFiles)
-        {
-            FString FullPath = TemplatesDir / TemplateFile;
-            LoadCustomWorkflowFromFile(FullPath);
-        }
-    }
-}
-
-bool UComfyUIClient::LoadCustomWorkflowFromFile(const FString& FilePath)
-{
-    if (!FPaths::FileExists(FilePath))
-    {
-        UE_LOG(LogTemp, Warning, TEXT("Workflow template file not found: %s"), *FilePath);
-        return false;
-    }
-    
-    FString TemplateContent;
-    if (!FFileHelper::LoadFileToString(TemplateContent, *FilePath))
-    {
-        UE_LOG(LogTemp, Error, TEXT("Failed to load workflow template: %s"), *FilePath);
-        return false;
-    }
-    
-    // 验证JSON格式
-    TSharedPtr<FJsonObject> TemplateJson;
-    TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(TemplateContent);
-    if (!FJsonSerializer::Deserialize(Reader, TemplateJson))
-    {
-        UE_LOG(LogTemp, Error, TEXT("Invalid JSON in workflow template: %s"), *FilePath);
-        return false;
-    }
-    
-    // 创建工作流配置
-    FWorkflowConfig NewWorkflow;
-    FString FileName = FPaths::GetBaseFilename(FilePath);
-    NewWorkflow.Name = FileName;
-    NewWorkflow.Type = TEXT("custom");
-    NewWorkflow.Description = FString::Printf(TEXT("Custom workflow loaded from %s"), *FileName);
-    NewWorkflow.JsonTemplate = TemplateContent;
-    NewWorkflow.TemplateFile = FilePath;
-    
-    CustomWorkflowConfigs.Add(NewWorkflow);
-    UE_LOG(LogTemp, Log, TEXT("Loaded custom workflow template: %s"), *NewWorkflow.Name);
-    
-    return true;
-}
-
 void UComfyUIClient::DownloadGeneratedImage(const FString& Filename, const FString& Subfolder, const FString& Type)
 {
     // 构建图片下载URL
@@ -811,6 +774,7 @@ void UComfyUIClient::DownloadGeneratedImage(const FString& Filename, const FStri
     UE_LOG(LogTemp, Log, TEXT("Downloading image from: %s"), *ImageUrl);
     
     // 使用 NetworkManager 下载图片
+    EnsureNetworkManagerInitialized();
     if (NetworkManager)
     {
         NetworkManager->DownloadImage(ImageUrl, 
@@ -827,170 +791,10 @@ void UComfyUIClient::DownloadGeneratedImage(const FString& Filename, const FStri
     }
 }
 
-// ========== 工作流验证和管理功能 ==========
-
-bool UComfyUIClient::ValidateWorkflowFile(const FString& FilePath, FString& OutError)
-{
-    OutError.Empty();
-    
-    // 检查文件是否存在
-    if (!FPaths::FileExists(FilePath))
-    {
-        OutError = FString::Printf(TEXT("Workflow file not found: %s"), *FilePath);
-        return false;
-    }
-    
-    // 读取文件内容
-    FString JsonContent;
-    if (!FFileHelper::LoadFileToString(JsonContent, *FilePath))
-    {
-        OutError = FString::Printf(TEXT("Failed to read workflow file: %s"), *FilePath);
-        return false;
-    }
-    
-    // 验证JSON格式和工作流结构
-    FWorkflowConfig TempConfig;
-    return ValidateWorkflowJson(JsonContent, TempConfig, OutError);
-}
-
-bool UComfyUIClient::ImportWorkflowFile(const FString& FilePath, const FString& WorkflowName, FString& OutError)
-{
-    OutError.Empty();
-    
-    // 首先验证工作流
-    if (!ValidateWorkflowFile(FilePath, OutError))
-    {
-        return false;
-    }
-    
-    // 读取工作流内容
-    FString JsonContent;
-    if (!FFileHelper::LoadFileToString(JsonContent, *FilePath))
-    {
-        OutError = TEXT("Failed to read workflow file");
-        return false;
-    }
-    
-    // 创建工作流配置
-    FWorkflowConfig NewWorkflow;
-    if (!ValidateWorkflowJson(JsonContent, NewWorkflow, OutError))
-    {
-        return false;
-    }
-    
-    // 设置工作流信息
-    NewWorkflow.Name = SanitizeWorkflowName(WorkflowName);
-    NewWorkflow.Type = TEXT("custom");
-    NewWorkflow.Description = FString::Printf(TEXT("Custom workflow: %s"), *NewWorkflow.Name);
-    NewWorkflow.JsonTemplate = JsonContent;
-    NewWorkflow.TemplateFile = FilePath;
-    
-    // 保存到插件目录
-    FString PluginDir = FPaths::ProjectPluginsDir() / TEXT("ComfyUIIntegration");
-    FString TemplatesDir = PluginDir / TEXT("Config") / TEXT("Templates");
-    FString TargetFile = TemplatesDir / (NewWorkflow.Name + TEXT(".json"));
-    
-    UE_LOG(LogTemp, Log, TEXT("ImportWorkflow: Source file: %s"), *FilePath);
-    UE_LOG(LogTemp, Log, TEXT("ImportWorkflow: Target directory: %s"), *TemplatesDir);
-    UE_LOG(LogTemp, Log, TEXT("ImportWorkflow: Target file: %s"), *TargetFile);
-    
-    // 确保目录存在
-    if (!FPaths::DirectoryExists(TemplatesDir))
-    {
-        UE_LOG(LogTemp, Log, TEXT("ImportWorkflow: Creating templates directory"));
-        if (!IFileManager::Get().MakeDirectory(*TemplatesDir, true))
-        {
-            OutError = FString::Printf(TEXT("Failed to create templates directory: %s"), *TemplatesDir);
-            UE_LOG(LogTemp, Error, TEXT("ImportWorkflow: %s"), *OutError);
-            return false;
-        }
-    }
-    
-    // 验证源文件存在
-    if (!FPaths::FileExists(FilePath))
-    {
-        OutError = FString::Printf(TEXT("Source workflow file not found: %s"), *FilePath);
-        UE_LOG(LogTemp, Error, TEXT("ImportWorkflow: %s"), *OutError);
-        return false;
-    }
-    
-    // 使用 FFileHelper 复制文件（更可靠）
-    UE_LOG(LogTemp, Log, TEXT("ImportWorkflow: Saving workflow content to target file"));
-    if (!FFileHelper::SaveStringToFile(JsonContent, *TargetFile))
-    {
-        OutError = FString::Printf(TEXT("Failed to save workflow to: %s"), *TargetFile);
-        UE_LOG(LogTemp, Error, TEXT("ImportWorkflow: %s"), *OutError);
-        return false;
-    }
-    
-    // 验证文件是否成功创建
-    if (!FPaths::FileExists(TargetFile))
-    {
-        OutError = FString::Printf(TEXT("Workflow file was not created at: %s"), *TargetFile);
-        UE_LOG(LogTemp, Error, TEXT("ImportWorkflow: %s"), *OutError);
-        return false;
-    }
-    
-    // 添加到配置列表
-    CustomWorkflowConfigs.Add(NewWorkflow);
-    
-    UE_LOG(LogTemp, Log, TEXT("Successfully imported workflow: %s"), *NewWorkflow.Name);
-    return true;
-}
-
-TArray<FString> UComfyUIClient::GetWorkflowParameterNames(const FString& WorkflowName) const
-{
-    TArray<FString> ParameterNames;
-    
-    // 查找工作流配置
-    const FWorkflowConfig* FoundConfig = nullptr;
-    for (const auto& Config : CustomWorkflowConfigs)
-    {
-        if (Config.Name == WorkflowName)
-        {
-            FoundConfig = &Config;
-            break;
-        }
-    }
-    
-    if (FoundConfig)
-    {
-        for (const auto& ParamDef : FoundConfig->ParameterDefinitions)
-        {
-            ParameterNames.Add(ParamDef.Name);
-        }
-    }
-    
-    return ParameterNames;
-}
-
-void UComfyUIClient::TestWorkflowConnection()
-{
-    // 使用 NetworkManager 测试服务器连接
-    if (NetworkManager)
-    {
-        NetworkManager->TestServerConnection(ServerUrl, 
-            [this](bool bSuccess, const FString& ErrorMessage)
-            {
-                if (bSuccess)
-                {
-                    UE_LOG(LogTemp, Log, TEXT("ComfyUI server connection successful"));
-                }
-                else
-                {
-                    UE_LOG(LogTemp, Error, TEXT("Failed to connect to ComfyUI server: %s"), *ErrorMessage);
-                }
-            });
-    }
-    else
-    {
-        UE_LOG(LogTemp, Error, TEXT("NetworkManager not initialized"));
-    }
-}
-
 void UComfyUIClient::TestServerConnection(const FOnConnectionTested& OnComplete)
 {
     // 使用 NetworkManager 测试服务器连接
+    EnsureNetworkManagerInitialized();
     if (NetworkManager)
     {
         NetworkManager->TestServerConnection(ServerUrl, 
@@ -1005,246 +809,12 @@ void UComfyUIClient::TestServerConnection(const FOnConnectionTested& OnComplete)
     }
 }
 
-bool UComfyUIClient::ValidateWorkflowJson(const FString& JsonContent, FWorkflowConfig& OutConfig, FString& OutError)
-{
-    OutError.Empty();
-    
-    // 解析JSON
-    TSharedPtr<FJsonObject> WorkflowJson;
-    TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(JsonContent);
-    if (!FJsonSerializer::Deserialize(Reader, WorkflowJson))
-    {
-        OutError = TEXT("Invalid JSON format");
-        return false;
-    }
-    
-    if (!WorkflowJson.IsValid())
-    {
-        OutError = TEXT("Empty or invalid workflow JSON");
-        return false;
-    }
-    
-    // 检查是否是有效的ComfyUI工作流格式
-    bool bHasValidNodes = false;
-    for (const auto& NodePair : WorkflowJson->Values)
-    {
-        if (NodePair.Value->Type == EJson::Object)
-        {
-            TSharedPtr<FJsonObject> NodeObj = NodePair.Value->AsObject();
-            if (NodeObj->HasField(TEXT("class_type")))
-            {
-                bHasValidNodes = true;
-                break;
-            }
-        }
-    }
-    
-    if (!bHasValidNodes)
-    {
-        OutError = TEXT("No valid ComfyUI nodes found. Make sure this is a ComfyUI workflow export.");
-        return false;
-    }
-    
-    // 分析工作流节点
-    if (!AnalyzeWorkflowNodes(WorkflowJson, OutConfig))
-    {
-        OutError = TEXT("Failed to analyze workflow structure");
-        return false;
-    }
-    
-    // 查找输入和输出节点
-    if (!FindWorkflowInputs(WorkflowJson, OutConfig.RequiredInputs))
-    {
-        UE_LOG(LogTemp, Warning, TEXT("No input parameters found in workflow"));
-    }
-    
-    if (!FindWorkflowOutputs(WorkflowJson, OutConfig.OutputNodes))
-    {
-        OutError = TEXT("No output nodes found. Workflow must have at least one SaveImage or PreviewImage node.");
-        return false;
-    }
-    
-    OutConfig.bIsValid = true;
-    OutConfig.JsonTemplate = JsonContent;
-    
-    UE_LOG(LogTemp, Log, TEXT("Workflow validation successful. Found %d inputs and %d outputs"), 
-           OutConfig.RequiredInputs.Num(), OutConfig.OutputNodes.Num());
-    
-    return true;
-}
-
-bool UComfyUIClient::AnalyzeWorkflowNodes(TSharedPtr<FJsonObject> WorkflowJson, FWorkflowConfig& OutConfig)
-{
-    if (!WorkflowJson.IsValid())
-    {
-        return false;
-    }
-    
-    OutConfig.ParameterDefinitions.Empty();
-    
-    // 遍历所有节点
-    for (const auto& NodePair : WorkflowJson->Values)
-    {
-        FString NodeId = NodePair.Key;
-        TSharedPtr<FJsonObject> NodeObj = NodePair.Value->AsObject();
-        
-        if (!NodeObj.IsValid() || !NodeObj->HasField(TEXT("class_type")))
-        {
-            continue;
-        }
-        
-        FString ClassType = NodeObj->GetStringField(TEXT("class_type"));
-        
-        // 检查常见的输入节点类型
-        if (ClassType == TEXT("CLIPTextEncode") || ClassType == TEXT("PromptText"))
-        {
-            // 文本输入节点
-            FWorkflowConfig::FParameterDef PromptParam;
-            PromptParam.Name = FString::Printf(TEXT("prompt_%s"), *NodeId);
-            PromptParam.Type = TEXT("text");
-            PromptParam.DefaultValue = TEXT("");
-            PromptParam.Description = FString::Printf(TEXT("Text prompt for node %s"), *NodeId);
-            OutConfig.ParameterDefinitions.Add(PromptParam);
-        }
-        else if (ClassType == TEXT("KSampler") || ClassType == TEXT("SamplerCustom"))
-        {
-            // 采样器节点 - 添加常见参数
-            if (NodeObj->HasField(TEXT("inputs")))
-            {
-                TSharedPtr<FJsonObject> InputsObj = NodeObj->GetObjectField(TEXT("inputs"));
-                
-                // Steps参数
-                if (InputsObj->HasField(TEXT("steps")))
-                {
-                    FWorkflowConfig::FParameterDef StepsParam;
-                    StepsParam.Name = FString::Printf(TEXT("steps_%s"), *NodeId);
-                    StepsParam.Type = TEXT("number");
-                    StepsParam.DefaultValue = TEXT("20");
-                    StepsParam.Description = TEXT("Number of sampling steps");
-                    StepsParam.MinValue = 1.0f;
-                    StepsParam.MaxValue = 100.0f;
-                    OutConfig.ParameterDefinitions.Add(StepsParam);
-                }
-                
-                // CFG参数
-                if (InputsObj->HasField(TEXT("cfg")))
-                {
-                    FWorkflowConfig::FParameterDef CfgParam;
-                    CfgParam.Name = FString::Printf(TEXT("cfg_%s"), *NodeId);
-                    CfgParam.Type = TEXT("number");
-                    CfgParam.DefaultValue = TEXT("7.0");
-                    CfgParam.Description = TEXT("CFG Scale");
-                    CfgParam.MinValue = 1.0f;
-                    CfgParam.MaxValue = 30.0f;
-                    OutConfig.ParameterDefinitions.Add(CfgParam);
-                }
-            }
-        }
-    }
-    
-    return true;
-}
-
-bool UComfyUIClient::FindWorkflowInputs(TSharedPtr<FJsonObject> WorkflowJson, TArray<FString>& OutInputs)
-{
-    OutInputs.Empty();
-    
-    if (!WorkflowJson.IsValid())
-    {
-        return false;
-    }
-    
-    // 查找包含文本输入的节点
-    TArray<FString> TextInputNodes = {
-        TEXT("CLIPTextEncode"),
-        TEXT("PromptText"),
-        TEXT("StringConstant"),
-        TEXT("Text")
-    };
-    
-    for (const auto& NodePair : WorkflowJson->Values)
-    {
-        TSharedPtr<FJsonObject> NodeObj = NodePair.Value->AsObject();
-        if (!NodeObj.IsValid())
-        {
-            continue;
-        }
-        
-        FString ClassType = NodeObj->GetStringField(TEXT("class_type"));
-        if (TextInputNodes.Contains(ClassType))
-        {
-            OutInputs.Add(NodePair.Key);
-        }
-    }
-    
-    return OutInputs.Num() > 0;
-}
-
-bool UComfyUIClient::FindWorkflowOutputs(TSharedPtr<FJsonObject> WorkflowJson, TArray<FString>& OutOutputs)
-{
-    OutOutputs.Empty();
-    
-    if (!WorkflowJson.IsValid())
-    {
-        return false;
-    }
-    
-    // 查找输出节点
-    TArray<FString> OutputNodeTypes = {
-        TEXT("SaveImage"),
-        TEXT("PreviewImage"),
-        TEXT("SaveImageWebsocket"),
-        TEXT("ImageOutput")
-    };
-    
-    for (const auto& NodePair : WorkflowJson->Values)
-    {
-        TSharedPtr<FJsonObject> NodeObj = NodePair.Value->AsObject();
-        if (!NodeObj.IsValid())
-        {
-            continue;
-        }
-        
-        FString ClassType = NodeObj->GetStringField(TEXT("class_type"));
-        if (OutputNodeTypes.Contains(ClassType))
-        {
-            OutOutputs.Add(NodePair.Key);
-        }
-    }
-    
-    return OutOutputs.Num() > 0;
-}
-
-FString UComfyUIClient::SanitizeWorkflowName(const FString& Name)
-{
-    FString SanitizedName = Name;
-    
-    // 移除或替换不安全的字符
-    SanitizedName = SanitizedName.Replace(TEXT(" "), TEXT("_"));
-    SanitizedName = SanitizedName.Replace(TEXT("/"), TEXT("_"));
-    SanitizedName = SanitizedName.Replace(TEXT("\\"), TEXT("_"));
-    SanitizedName = SanitizedName.Replace(TEXT(":"), TEXT("_"));
-    SanitizedName = SanitizedName.Replace(TEXT("*"), TEXT("_"));
-    SanitizedName = SanitizedName.Replace(TEXT("?"), TEXT("_"));
-    SanitizedName = SanitizedName.Replace(TEXT("\""), TEXT("_"));
-    SanitizedName = SanitizedName.Replace(TEXT("<"), TEXT("_"));
-    SanitizedName = SanitizedName.Replace(TEXT(">"), TEXT("_"));
-    SanitizedName = SanitizedName.Replace(TEXT("|"), TEXT("_"));
-    
-    // 确保不为空
-    if (SanitizedName.IsEmpty())
-    {
-        SanitizedName = TEXT("CustomWorkflow");
-    }
-    
-    return SanitizedName;
-}
-
 // ========== 错误处理和重试机制 ==========
 
 FComfyUIError UComfyUIClient::AnalyzeHttpError(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful)
 {
     // 调用 NetworkManager 的 AnalyzeHttpError
+    EnsureNetworkManagerInitialized();
     if (NetworkManager)
     {
         return NetworkManager->AnalyzeHttpError(Request, Response, bWasSuccessful);
@@ -1256,6 +826,7 @@ FComfyUIError UComfyUIClient::AnalyzeHttpError(FHttpRequestPtr Request, FHttpRes
 bool UComfyUIClient::ShouldRetryRequest(const FComfyUIError& Error)
 {
     // 调用 NetworkManager 的 ShouldRetryRequest
+    EnsureNetworkManagerInitialized();
     if (NetworkManager)
     {
         return NetworkManager->ShouldRetryRequest(Error, CurrentRetryCount, MaxRetryAttempts);
@@ -1330,6 +901,7 @@ void UComfyUIClient::ResetRetryState()
 FString UComfyUIClient::GetUserFriendlyErrorMessage(const FComfyUIError& Error)
 {
     // 调用 NetworkManager 的 GetUserFriendlyErrorMessage
+    EnsureNetworkManagerInitialized();
     if (NetworkManager)
     {
         return NetworkManager->GetUserFriendlyErrorMessage(Error);
@@ -1361,6 +933,10 @@ void UComfyUIClient::OnPromptResponse(const FString& ResponseContent, bool bSucc
         {
             // 重置重试状态，因为这一步成功了
             ResetRetryState();
+            
+            // 通知生成开始
+            OnGenerationStartedCallback.ExecuteIfBound(CurrentPromptId);
+            
             // 开始轮询生成状态
             PollGenerationStatus(CurrentPromptId);
         }
@@ -1381,4 +957,103 @@ void UComfyUIClient::OnPromptResponse(const FString& ResponseContent, bool bSucc
                               TEXT("检查服务器响应格式"), false);
         HandleRequestError(JsonError, [this]() { RetryCurrentOperation(); });
     }
+}
+
+void UComfyUIClient::CancelCurrentGeneration()
+{
+    bIsCancelled = true;
+    
+    // 清除计时器
+    if (WorldContext.IsValid())
+    {
+        WorldContext->GetTimerManager().ClearTimer(StatusPollTimer);
+    }
+    
+    // 取消当前HTTP请求
+    if (CurrentRequest.IsValid())
+    {
+        CurrentRequest->CancelRequest();
+        CurrentRequest.Reset();
+    }
+    
+    // 重置状态
+    CurrentPromptId.Empty();
+    ResetRetryState();
+    
+    UE_LOG(LogTemp, Log, TEXT("Generation cancelled"));
+}
+
+FComfyUIProgressInfo UComfyUIClient::ParseQueueStatus(const FString& ResponseContent)
+{
+    FComfyUIProgressInfo ProgressInfo;
+    
+    // 检查是否被取消
+    if (bIsCancelled)
+    {
+        ProgressInfo.StatusMessage = TEXT("已取消");
+        return ProgressInfo;
+    }
+    
+    TSharedPtr<FJsonObject> JsonObject;
+    TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ResponseContent);
+    if (!FJsonSerializer::Deserialize(Reader, JsonObject))
+    {
+        ProgressInfo.StatusMessage = TEXT("解析状态响应失败");
+        return ProgressInfo;
+    }
+
+    // 检查是否在队列中运行
+    if (JsonObject->HasField(TEXT("queue_running")))
+    {
+        const TArray<TSharedPtr<FJsonValue>>* QueueRunningArray;
+        if (JsonObject->TryGetArrayField(TEXT("queue_running"), QueueRunningArray))
+        {
+            for (int32 i = 0; i < QueueRunningArray->Num(); ++i)
+            {
+                TSharedPtr<FJsonObject> QueueItem = (*QueueRunningArray)[i]->AsObject();
+                if (QueueItem.IsValid() && QueueItem->HasField(TEXT("1")))
+                {
+                    FString QueuePromptId = QueueItem->GetStringField(TEXT("1"));
+                    if (QueuePromptId == CurrentPromptId)
+                    {
+                        ProgressInfo.QueuePosition = 0; // 正在执行
+                        ProgressInfo.bIsExecuting = true;
+                        ProgressInfo.StatusMessage = TEXT("正在执行...");
+                        ProgressInfo.ProgressPercentage = 0.5f; // 假设50%进度当正在执行时
+                        return ProgressInfo;
+                    }
+                }
+            }
+        }
+    }
+
+    // 检查是否在等待队列中
+    if (JsonObject->HasField(TEXT("queue_pending")))
+    {
+        const TArray<TSharedPtr<FJsonValue>>* QueuePendingArray;
+        if (JsonObject->TryGetArrayField(TEXT("queue_pending"), QueuePendingArray))
+        {
+            for (int32 i = 0; i < QueuePendingArray->Num(); ++i)
+            {
+                TSharedPtr<FJsonObject> QueueItem = (*QueuePendingArray)[i]->AsObject();
+                if (QueueItem.IsValid() && QueueItem->HasField(TEXT("1")))
+                {
+                    FString QueuePromptId = QueueItem->GetStringField(TEXT("1"));
+                    if (QueuePromptId == CurrentPromptId)
+                    {
+                        ProgressInfo.QueuePosition = i + 1; // 队列位置从1开始
+                        ProgressInfo.bIsExecuting = false;
+                        ProgressInfo.StatusMessage = FString::Printf(TEXT("队列等待中.. (位置: %d)"), ProgressInfo.QueuePosition);
+                        ProgressInfo.ProgressPercentage = 0.0f;
+                        return ProgressInfo;
+                    }
+                }
+            }
+        }
+    }
+
+    // 如果都没找到，可能已经完成或出错
+    ProgressInfo.StatusMessage = TEXT("检查完成状态..");
+    ProgressInfo.ProgressPercentage = 0.8f;
+    return ProgressInfo;
 }

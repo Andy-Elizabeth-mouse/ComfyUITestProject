@@ -53,3 +53,7 @@
 ```powershell
 & "E:\ue\UE_5.5\Engine\Build\BatchFiles\Build.bat" ComfyUITestProjectEditor Win64 Development "C:\UnrealProjects\ComfyUITestProject\ComfyUITestProject.uproject" -waitmutex
 ```
+重新生成项目文件
+```cmd
+E:\ue\UE_5.5\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe -projectfiles -project="C:\UnrealProjects\ComfyUITestProject\ComfyUITestProject.uproject" -game -rocket -progress -engine -VSCode
+```

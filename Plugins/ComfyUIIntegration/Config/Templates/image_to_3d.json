@@ -1,0 +1,45 @@
+{
+    "1": {
+        "inputs": {
+            "image": "{INPUT_IMAGE}",
+            "strength": 0.8,
+            "guidance_scale": 7.5,
+            "num_inference_steps": 40
+        },
+        "class_type": "LoadImage"
+    },
+    "2": {
+        "inputs": {
+            "prompt": "{POSITIVE_PROMPT}",
+            "image": ["1", 0],
+            "depth_estimation": true,
+            "camera_elevation": 15,
+            "camera_azimuth": 0
+        },
+        "class_type": "ImageTo3DNode"
+    },
+    "3": {
+        "inputs": {
+            "image_to_3d_result": ["2", 0],
+            "output_format": "glb",
+            "texture_size": 1024,
+            "mesh_resolution": "high"
+        },
+        "class_type": "3DModelProcessor"
+    },
+    "4": {
+        "inputs": {
+            "3d_model": ["3", 0],
+            "optimize_for_game": true,
+            "generate_lods": true
+        },
+        "class_type": "MeshOptimizer"
+    },
+    "5": {
+        "inputs": {
+            "optimized_model": ["4", 0],
+            "filename_prefix": "ComfyUI_Img2_3D"
+        },
+        "class_type": "Save3DModel"
+    }
+}

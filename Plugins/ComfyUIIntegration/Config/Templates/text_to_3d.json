@@ -1,0 +1,33 @@
+{
+    "1": {
+        "inputs": {
+            "text": "{POSITIVE_PROMPT}",
+            "guidance_scale": 7.5,
+            "num_inference_steps": 50,
+            "seed": 42
+        },
+        "class_type": "TextTo3DNode"
+    },
+    "2": {
+        "inputs": {
+            "text_to_3d_result": ["1", 0],
+            "output_format": "glb"
+        },
+        "class_type": "3DModelExporter"
+    },
+    "3": {
+        "inputs": {
+            "model": ["2", 0],
+            "texture_resolution": 1024,
+            "generate_textures": true
+        },
+        "class_type": "TextureGenerator"
+    },
+    "4": {
+        "inputs": {
+            "3d_model": ["3", 0],
+            "filename_prefix": "ComfyUI_3D"
+        },
+        "class_type": "Save3DModel"
+    }
+}

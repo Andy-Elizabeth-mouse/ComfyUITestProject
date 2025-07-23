@@ -273,7 +273,7 @@ void UComfyUIClient::CallAPI()
 
 ### 添加新的工作流类型
 
-1. 在 `ComfyUIWidget.h` 中的 `EWorkflowType` 枚举添加新类型
+1. 在 `ComfyUIWidget.h` 中的 `EComfyUIWorkflowType` 枚举添加新类型
 2. 在 `ComfyUIClient.cpp` 的 `InitializeWorkflowConfigs()` 中添加配置
 3. 更新UI文本和界面逻辑
 
@@ -300,7 +300,7 @@ void SetServerUrl(const FString& Url);
 
 // 生成图像
 void GenerateImage(const FString& Prompt, const FString& NegativePrompt, 
-                  EWorkflowType WorkflowType, const FOnImageGenerated& OnComplete);
+                  EComfyUIWorkflowType WorkflowType, const FOnImageGenerated& OnComplete);
 
 // 检查服务器状态
 void CheckServerStatus();
