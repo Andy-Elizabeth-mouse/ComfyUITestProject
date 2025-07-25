@@ -34,7 +34,13 @@ public class ComfyUIIntegration : ModuleRules
                 "Json",
                 "JsonUtilities",
                 "ImageWrapper",
-                "AssetRegistry"
+                "AssetRegistry",
+                
+                // 3D和材质相关
+                "MeshDescription",
+                "StaticMeshDescription",
+                "StaticMeshEditor",
+                "MaterialEditor"
             }
         );
 
@@ -54,7 +60,12 @@ public class ComfyUIIntegration : ModuleRules
                 "InputCore",
                 "RenderCore",
                 "RHI",
-                "DesktopPlatform"
+                "DesktopPlatform",
+                
+                // 3D模型处理相关
+                "MeshUtilities",
+                "StaticMeshEditor",
+                "MeshBuilder"
             }
         );
 

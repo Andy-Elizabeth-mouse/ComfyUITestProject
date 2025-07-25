@@ -2,31 +2,67 @@
     "1": {
         "inputs": {
             "text": "{POSITIVE_PROMPT}",
-            "guidance_scale": 7.5,
-            "num_inference_steps": 50,
-            "seed": 42
+            "clip": ["2", 1]
         },
-        "class_type": "TextTo3DNode"
+        "class_type": "CLIPTextEncode"
     },
     "2": {
         "inputs": {
-            "text_to_3d_result": ["1", 0],
-            "output_format": "glb"
+            "ckpt_name": "sv3d_u.safetensors"
         },
-        "class_type": "3DModelExporter"
+        "class_type": "CheckpointLoaderSimple"
     },
     "3": {
         "inputs": {
+            "seed": 123456,
+            "steps": 25,
+            "cfg": 7.5,
+            "sampler_name": "dpmpp_2m",
+            "scheduler": "karras",
+            "denoise": 1.0,
             "model": ["2", 0],
-            "texture_resolution": 1024,
-            "generate_textures": true
+            "positive": ["1", 0],
+            "negative": ["4", 0],
+            "latent_image": ["5", 0]
         },
-        "class_type": "TextureGenerator"
+        "class_type": "KSampler"
     },
     "4": {
         "inputs": {
-            "3d_model": ["3", 0],
-            "filename_prefix": "ComfyUI_3D"
+            "text": "{NEGATIVE_PROMPT}",
+            "clip": ["2", 1]
+        },
+        "class_type": "CLIPTextEncode"
+    },
+    "5": {
+        "inputs": {
+            "width": 512,
+            "height": 512,
+            "batch_size": 1
+        },
+        "class_type": "EmptyLatentImage"
+    },
+    "6": {
+        "inputs": {
+            "samples": ["3", 0],
+            "vae": ["2", 2]
+        },
+        "class_type": "VAEDecode"
+    },
+    "7": {
+        "inputs": {
+            "images": ["6", 0],
+            "elevation": 0.0,
+            "azimuth": 0.0,
+            "num_views": 21,
+            "output_format": "obj"
+        },
+        "class_type": "ImageTo3D"
+    },
+    "8": {
+        "inputs": {
+            "filename_prefix": "text_to_3d",
+            "mesh_data": ["7", 0]
         },
         "class_type": "Save3DModel"
     }

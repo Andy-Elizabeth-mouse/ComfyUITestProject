@@ -92,4 +92,7 @@ private:
 
     /** 已知的数值输入参数名称 */
     TArray<FString> NumberInputParameters;
+
+    /** 已知的网格输入参数名称 */
+    TArray<FString> MeshInputParameters;
 };

@@ -1,6 +1,5 @@
 #include "Workflow/ComfyUIWorkflowManager.h"
 #include "Workflow/ComfyUINodeAnalyzer.h"
-#include "Test/ComfyUIWorkflowTester.h"
 #include "Utils/ComfyUIFileManager.h"
 #include "Utils/Defines.h"
 #include "Dom/JsonObject.h"
@@ -321,7 +320,7 @@ bool UComfyUIWorkflowManager::ExportWorkflowConfig(const FWorkflowConfig& Config
 }
 
 // ========== 工作流JSON构建 ==========
-
+#pragma optimize("", off)
 FString UComfyUIWorkflowManager::BuildCustomWorkflowJson(const FString& Prompt, const FString& NegativePrompt, 
                                                          const FString& CustomWorkflowName)
 {
@@ -387,7 +386,7 @@ FString UComfyUIWorkflowManager::BuildCustomWorkflowJson(const FString& Prompt, 
     UE_LOG(LogTemp, Log, TEXT("BuildCustomWorkflowJson: Successfully built workflow JSON for: %s"), *CustomWorkflowName);
     return OutputString;
 }
-
+#pragma optimize("", on)
 FString UComfyUIWorkflowManager::ReplaceWorkflowPlaceholders(const FString& WorkflowTemplate, 
                                                            const FString& Prompt, 
                                                            const FString& NegativePrompt,
@@ -834,24 +833,4 @@ bool UComfyUIWorkflowManager::UpdateWorkflowInputOutputInfo(const FString& Workf
            *WorkflowName, Inputs.Num(), Outputs.Num(), (int32)Config->DetectedType);
     
     return true;
-}
-
-bool UComfyUIWorkflowManager::RunWorkflowTests()
-{
-    UE_LOG(LogTemp, Warning, TEXT("开始运行ComfyUI工作流测试..."));
-    
-    // 创建测试器并运行测试
-    UComfyUIWorkflowTester* Tester = NewObject<UComfyUIWorkflowTester>(this);
-    
-    bool bTypeDetectionPassed = Tester->TestWorkflowTypeDetection();
-    bool bUIGenerationPassed = Tester->TestUIGeneration();
-    
-    bool bAllTestsPassed = bTypeDetectionPassed && bUIGenerationPassed;
-    
-    UE_LOG(LogTemp, Warning, TEXT("ComfyUI工作流测试完成:"));
-    UE_LOG(LogTemp, Warning, TEXT("  - 类型检测测试: %s"), bTypeDetectionPassed ? TEXT("通过") : TEXT("失败"));
-    UE_LOG(LogTemp, Warning, TEXT("  - UI生成测试: %s"), bUIGenerationPassed ? TEXT("通过") : TEXT("失败"));
-    UE_LOG(LogTemp, Warning, TEXT("  - 整体结果: %s"), bAllTestsPassed ? TEXT("通过") : TEXT("失败"));
-    
-    return bAllTestsPassed;
 }

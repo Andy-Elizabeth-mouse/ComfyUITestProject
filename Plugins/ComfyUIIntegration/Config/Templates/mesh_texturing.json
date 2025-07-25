@@ -1,0 +1,61 @@
+{
+  "9": {
+    "inputs": {
+      "albedo": "{INPUT_ALBEDO}",
+      "mr": "{INPUT_MR}"
+    },
+    "class_type": "Hy3DBakeMultiViews"
+  },
+  "36": {
+    "inputs": {
+      "model_file": "{OUTPUT_MESH_NAME}"
+    },
+    "class_type": "Preview3D"
+  },
+  "40": {
+    "inputs": {},
+    "class_type": "Hy3D21CameraConfig"
+  },
+  "56": {
+    "inputs": {
+      "image": "{INPUT_IMAGE}",
+      "resolution": "{RESOLUTION|768}",
+      "num_views": "{NUM_VIEWS|10}",
+      "elevation": "{ELEVATION|3}",
+      "size": "{SIZE|1024}",
+      "do_rescale": "{DO_RESCALE|false}",
+      "seed": "{SEED|random}"
+    },
+    "class_type": "Hy3DMultiViewsGenerator"
+  },
+  "60": {
+    "inputs": {
+      "image": "{INPUT_IMAGE}",
+      "upload": "image"
+    },
+    "class_type": "Hy3D21LoadImageWithTransparency"
+  },
+  "64": {
+    "inputs": {
+      "images": "{ALBEDO_OUTPUT}",
+      "filename_prefix": "{FILENAME_PREFIX|MV}"
+    },
+    "class_type": "SaveImage"
+  },
+  "66": {
+    "inputs": {
+      "output_mesh_name": "{OUTPUT_MESH_NAME|TexturedMesh}"
+    },
+    "class_type": "Hy3DInPaint"
+  },
+  "68": {
+    "inputs": {
+      "mesh_file": "{INPUT_MESH_FILE}"
+    },
+    "class_type": "Hy3D21LoadMesh"
+  },
+  "69": {
+    "inputs": {},
+    "class_type": "Hy3D21MeshUVWrap"
+  }
+}

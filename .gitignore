@@ -3,6 +3,7 @@
 # Editor and IDE files
 .vscode/
 .vs/
+.claude/
 *.suo
 *.user
 *.userprefs

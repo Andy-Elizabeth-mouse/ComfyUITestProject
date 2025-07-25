@@ -121,6 +121,107 @@ UTexture2D* UComfyUIFileManager::CreateTextureFromImageData(const TArray<uint8>&
     return nullptr;
 }
 
+bool UComfyUIFileManager::ExtractImageDataFromTexture(UTexture2D* Texture, TArray<uint8>& OutImageData, EComfyUIImageFormat ImageFormat)
+{
+    OutImageData.Empty();
+    
+    if (!Texture)
+    {
+        UE_LOG(LogTemp, Error, TEXT("ExtractImageDataFromTexture: Texture is null"));
+        return false;
+    }
+    
+    // 获取纹理平台数据
+    FTexture2DMipMap& MipMap = Texture->GetPlatformData()->Mips[0];
+    void* TextureData = MipMap.BulkData.Lock(LOCK_READ_ONLY);
+    
+    if (!TextureData)
+    {
+        UE_LOG(LogTemp, Error, TEXT("ExtractImageDataFromTexture: Failed to lock texture data"));
+        return false;
+    }
+    
+    int32 TextureWidth = Texture->GetSizeX();
+    int32 TextureHeight = Texture->GetSizeY();
+    EPixelFormat PixelFormat = Texture->GetPixelFormat();
+    
+    // 确定图像包装器格式
+    EImageFormat WrapperFormat;
+    switch (ImageFormat)
+    {
+        case EComfyUIImageFormat::PNG:
+            WrapperFormat = EImageFormat::PNG;
+            break;
+        case EComfyUIImageFormat::JPEG:
+            WrapperFormat = EImageFormat::JPEG;
+            break;
+        case EComfyUIImageFormat::BMP:
+            WrapperFormat = EImageFormat::BMP;
+            break;
+        default:
+            WrapperFormat = EImageFormat::PNG;
+            break;
+    }
+    
+    // 获取图像包装器模块
+    IImageWrapperModule& ImageWrapperModule = FModuleManager::LoadModuleChecked<IImageWrapperModule>(FName("ImageWrapper"));
+    TSharedPtr<IImageWrapper> ImageWrapper = ImageWrapperModule.CreateImageWrapper(WrapperFormat);
+    
+    if (!ImageWrapper.IsValid())
+    {
+        MipMap.BulkData.Unlock();
+        LOG_AND_RETURN(Error, false, "ExtractImageDataFromTexture: Failed to create image wrapper for format %d", (int32)ImageFormat);
+    }
+    
+    // 转换像素数据
+    TArray<FColor> RawPixels;
+    bool bConversionSuccess = false;
+    
+    if (PixelFormat == PF_B8G8R8A8)
+    {
+        // 直接从BGRA数据读取
+        FColor* ColorData = static_cast<FColor*>(TextureData);
+        RawPixels.SetNumUninitialized(TextureWidth * TextureHeight);
+        FMemory::Memcpy(RawPixels.GetData(), ColorData, TextureWidth * TextureHeight * sizeof(FColor));
+        bConversionSuccess = true;
+    }
+    else if (PixelFormat == PF_R8G8B8A8)
+    {
+        // 从RGBA数据读取并转换为BGRA
+        uint8* ByteData = static_cast<uint8*>(TextureData);
+        RawPixels.SetNumUninitialized(TextureWidth * TextureHeight);
+        for (int32 i = 0; i < TextureWidth * TextureHeight; i++)
+        {
+            RawPixels[i].R = ByteData[i * 4 + 0];
+            RawPixels[i].G = ByteData[i * 4 + 1];
+            RawPixels[i].B = ByteData[i * 4 + 2];
+            RawPixels[i].A = ByteData[i * 4 + 3];
+        }
+        bConversionSuccess = true;
+    }
+    
+    MipMap.BulkData.Unlock();
+    
+    if (!bConversionSuccess)
+    {
+        LOG_AND_RETURN(Error, false, "ExtractImageDataFromTexture: Unsupported pixel format %d", (int32)PixelFormat);
+    }
+    
+    // 设置图像包装器数据
+    if (ImageWrapper->SetRaw(RawPixels.GetData(), RawPixels.Num() * sizeof(FColor), TextureWidth, TextureHeight, ERGBFormat::BGRA, 8))
+    {
+        OutImageData = ImageWrapper->GetCompressed();
+        if (OutImageData.Num() > 0)
+        {
+            UE_LOG(LogTemp, Log, TEXT("ExtractImageDataFromTexture: Successfully extracted %d bytes from %dx%d texture"), 
+                   OutImageData.Num(), TextureWidth, TextureHeight);
+            return true;
+        }
+    }
+    
+    LOG_AND_RETURN(Error, false, "ExtractImageDataFromTexture: Failed to compress image data");
+}
+
 bool UComfyUIFileManager::SaveTextureToProject(UTexture2D* Texture, const FString& AssetName, const FString& PackagePath)
 {
     if (!Texture)
@@ -567,187 +668,4 @@ FString UComfyUIFileManager::GenerateUniqueAssetName(const FString& BaseName, co
     }
 
     return UniqueAssetName;
-}
-
-// ========== 3D文件处理实现 ==========
-
-bool UComfyUIFileManager::Load3DModelFromFile(const FString& FilePath, TArray<uint8>& OutModelData)
-{
-    if (!FPaths::FileExists(FilePath))
-    {
-        UE_LOG(LogTemp, Error, TEXT("Load3DModelFromFile: File does not exist: %s"), *FilePath);
-        return false;
-    }
-
-    if (!FFileHelper::LoadFileToArray(OutModelData, *FilePath))
-    {
-        UE_LOG(LogTemp, Error, TEXT("Load3DModelFromFile: Failed to load file: %s"), *FilePath);
-        return false;
-    }
-
-    UE_LOG(LogTemp, Log, TEXT("Load3DModelFromFile: Successfully loaded %d bytes from %s"), OutModelData.Num(), *FilePath);
-    return true;
-}
-
-bool UComfyUIFileManager::Save3DModelToFile(const TArray<uint8>& ModelData, const FString& FilePath, EComfyUI3DFormat Format)
-{
-    if (ModelData.Num() == 0)
-    {
-        UE_LOG(LogTemp, Error, TEXT("Save3DModelToFile: Model data is empty"));
-        return false;
-    }
-
-    // 确保目录存在
-    FString DirectoryPath = FPaths::GetPath(FilePath);
-    if (!EnsureDirectoryExists(DirectoryPath))
-    {
-        UE_LOG(LogTemp, Error, TEXT("Save3DModelToFile: Failed to create directory: %s"), *DirectoryPath);
-        return false;
-    }
-
-    // 验证格式（基础验证）
-    if (!ValidateF3DFormat(ModelData, Format))
-    {
-        UE_LOG(LogTemp, Warning, TEXT("Save3DModelToFile: Format validation failed, proceeding anyway"));
-    }
-
-    // 保存文件
-    if (!FFileHelper::SaveArrayToFile(ModelData, *FilePath))
-    {
-        UE_LOG(LogTemp, Error, TEXT("Save3DModelToFile: Failed to save file: %s"), *FilePath);
-        return false;
-    }
-
-    UE_LOG(LogTemp, Log, TEXT("Save3DModelToFile: Successfully saved %d bytes to %s"), ModelData.Num(), *FilePath);
-    return true;
-}
-
-bool UComfyUIFileManager::Save3DModelToProject(const TArray<uint8>& ModelData, const FString& AssetName, const FString& PackagePath)
-{
-    if (ModelData.Num() == 0)
-    {
-        UE_LOG(LogTemp, Error, TEXT("Save3DModelToProject: Model data is empty"));
-        return false;
-    }
-
-    if (AssetName.IsEmpty())
-    {
-        UE_LOG(LogTemp, Error, TEXT("Save3DModelToProject: AssetName is empty"));
-        return false;
-    }
-
-    // 清理资产名称
-    FString CleanAssetName = AssetName;
-    CleanAssetName = CleanAssetName.Replace(TEXT(" "), TEXT("_"));
-    CleanAssetName = CleanAssetName.Replace(TEXT("-"), TEXT("_"));
-
-    // 生成唯一名称
-    FString FinalPackagePath = PackagePath.StartsWith(TEXT("/")) ? PackagePath : (TEXT("/Game/") + PackagePath);
-    FString UniqueAssetName = GenerateUniqueAssetName(CleanAssetName, FinalPackagePath);
-
-    // 创建临时文件路径
-    FString TempDir = FPaths::ProjectSavedDir() / TEXT("ComfyUI") / TEXT("Temp");
-    EnsureDirectoryExists(TempDir);
-    FString TempFilePath = TempDir / (UniqueAssetName + TEXT(".glb"));
-
-    // 保存到临时文件
-    if (!Save3DModelToFile(ModelData, TempFilePath, EComfyUI3DFormat::GLB))
-    {
-        UE_LOG(LogTemp, Error, TEXT("Save3DModelToProject: Failed to save temporary file"));
-        return false;
-    }
-
-    // TODO: 使用UE5的FBX或glTF导入器导入到项目中
-    // 这需要更复杂的实现，涉及到FBXImporter或第三方glTF导入器
-    
-    UE_LOG(LogTemp, Log, TEXT("Save3DModelToProject: Saved temporary 3D model file at %s"), *TempFilePath);
-    UE_LOG(LogTemp, Warning, TEXT("Save3DModelToProject: Automatic import to project not yet implemented. Manual import required."));
-    
-    return true;
-}
-
-bool UComfyUIFileManager::ValidateF3DFormat(const TArray<uint8>& ModelData, EComfyUI3DFormat Format)
-{
-    if (ModelData.Num() < 4)
-    {
-        return false;
-    }
-
-    // 基础文件格式验证
-    switch (Format)
-    {
-    case EComfyUI3DFormat::GLB:
-        // GLB文件以"glTF"魔数开头（在偏移量4处）
-        return ModelData.Num() >= 12 && 
-               ModelData[4] == 'g' && ModelData[5] == 'l' && 
-               ModelData[6] == 'T' && ModelData[7] == 'F';
-        
-    case EComfyUI3DFormat::GLTF:
-        // GLTF是JSON格式，检查开头是否为'{'
-        return ModelData[0] == '{';
-        
-    case EComfyUI3DFormat::OBJ:
-        // OBJ文件通常以'#'或'v'开头
-        return ModelData[0] == '#' || ModelData[0] == 'v';
-        
-    case EComfyUI3DFormat::FBX:
-        // FBX二进制文件以特定魔数开头
-        return ModelData.Num() >= 23 && FMemory::Memcmp(ModelData.GetData(), "Kaydara FBX Binary", 18) == 0;
-        
-    case EComfyUI3DFormat::PLY:
-        // PLY文件以"ply"开头
-        return ModelData.Num() >= 3 && 
-               ModelData[0] == 'p' && ModelData[1] == 'l' && ModelData[2] == 'y';
-        
-    case EComfyUI3DFormat::STL:
-        // STL二进制文件头部检查（非ASCII格式）
-        if (ModelData.Num() >= 80)
-        {
-            // 检查是否为ASCII格式（以"solid"开头）
-            bool bIsASCII = ModelData.Num() >= 5 && 
-                           ModelData[0] == 's' && ModelData[1] == 'o' && 
-                           ModelData[2] == 'l' && ModelData[3] == 'i' && ModelData[4] == 'd';
-            return bIsASCII || ModelData.Num() >= 84; // 二进制STL至少84字节
-        }
-        return false;
-        
-    default:
-        return true; // 未知格式，假设有效
-    }
-}
-
-// ========== 简化的纹理处理实现 ==========
-
-bool UComfyUIFileManager::SaveGeneratedTexture(UTexture2D* Texture, const FString& BaseName, const FString& PackagePath)
-{
-    if (!Texture)
-    {
-        UE_LOG(LogTemp, Error, TEXT("SaveGeneratedTexture: Texture is null"));
-        return false;
-    }
-
-    if (BaseName.IsEmpty())
-    {
-        UE_LOG(LogTemp, Error, TEXT("SaveGeneratedTexture: BaseName is empty"));
-        return false;
-    }
-
-    FString FinalPackagePath = PackagePath.StartsWith(TEXT("/")) ? PackagePath : (TEXT("/Game/") + PackagePath);
-    
-    // 直接保存纹理
-    return SaveTextureToProject(Texture, BaseName, FinalPackagePath);
-}
-
-UMaterialInstanceDynamic* UComfyUIFileManager::CreateMaterialFromTexture(UTexture2D* DiffuseTexture, const FString& MaterialName)
-{
-    // 这个函数需要一个基础材质模板来创建材质实例
-    // 目前返回nullptr，需要在项目中添加合适的基础材质
-    UE_LOG(LogTemp, Warning, TEXT("CreateMaterialFromTexture: Function not yet implemented - requires base material template"));
-    
-    // TODO: 实现材质实例创建逻辑
-    // 1. 加载基础材质模板
-    // 2. 创建动态材质实例
-    // 3. 设置纹理参数
-    
-    return nullptr;
 }

@@ -6,12 +6,15 @@
 #include "ComfyUITypes.h"
 #include "ComfyUINetworkManager.generated.h"
 
+// NetworkManager需要反射系统支持，因为它继承自UObject
 UCLASS()
 class COMFYUIINTEGRATION_API UComfyUINetworkManager : public UObject
 {
     GENERATED_BODY()
     
 public:
+    UComfyUINetworkManager();
+    
     // HTTP请求相关方法
     void SendRequest(const FString& Url, const FString& Payload, TFunction<void(const FString& Response, bool bSuccess)> Callback);
     
@@ -20,6 +23,9 @@ public:
     
     // 图片下载请求
     void DownloadImage(const FString& Url, TFunction<void(const TArray<uint8>& ImageData, bool bSuccess)> Callback);
+    
+    // 图片上传请求
+    void UploadImage(const FString& ServerUrl, const TArray<uint8>& ImageData, const FString& FileName, TFunction<void(const FString& UploadedImageName, bool bSuccess)> Callback);
     
     // 轮询状态请求
     void PollQueueStatus(const FString& ServerUrl, const FString& PromptId, TFunction<void(const FString& Response, bool bSuccess)> Callback);

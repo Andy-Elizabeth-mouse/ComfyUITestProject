@@ -24,32 +24,6 @@ enum class EComfyUIImageFormat : uint8
     BMP
 };
 
-// 3D文件格式枚举
-UENUM(BlueprintType)
-enum class EComfyUI3DFormat : uint8
-{
-    GLB,        // glTF Binary
-    GLTF,       // glTF Text
-    OBJ,        // Wavefront OBJ
-    FBX,        // Autodesk FBX
-    PLY,        // Stanford PLY
-    STL         // Stereolithography
-};
-
-// 纹理类型枚举（PBR材质相关）
-UENUM(BlueprintType)
-enum class EComfyUITextureType : uint8
-{
-    Diffuse,    // 漫反射贴图
-    Normal,     // 法线贴图
-    Roughness,  // 粗糙度贴图
-    Metallic,   // 金属度贴图
-    AO,         // 环境遮蔽贴图
-    Emission,   // 自发光贴图
-    Height,     // 高度贴图
-    Opacity     // 透明度贴图
-};
-
 UCLASS()
 class COMFYUIINTEGRATION_API UComfyUIFileManager : public UObject
 {
@@ -63,6 +37,10 @@ public:
     // 创建纹理从图像数据
     UFUNCTION(BlueprintCallable, Category = "ComfyUI|File")
     static UTexture2D* CreateTextureFromImageData(const TArray<uint8>& ImageData);
+    
+    // 从纹理提取图像数据
+    UFUNCTION(BlueprintCallable, Category = "ComfyUI|File")
+    static bool ExtractImageDataFromTexture(UTexture2D* Texture, TArray<uint8>& OutImageData, EComfyUIImageFormat ImageFormat = EComfyUIImageFormat::PNG);
 
     // 保存纹理到项目资产
     UFUNCTION(BlueprintCallable, Category = "ComfyUI|File")
@@ -71,32 +49,6 @@ public:
     // 保存纹理到文件系统
     UFUNCTION(BlueprintCallable, Category = "ComfyUI|File")
     static bool SaveTextureToFile(UTexture2D* Texture, const FString& FilePath, EComfyUIImageFormat ImageFormat = EComfyUIImageFormat::PNG);
-
-    // === 3D文件操作 ===
-    // 从文件加载3D模型数据
-    UFUNCTION(BlueprintCallable, Category = "ComfyUI|File")
-    static bool Load3DModelFromFile(const FString& FilePath, TArray<uint8>& OutModelData);
-
-    // 保存3D模型数据到文件
-    UFUNCTION(BlueprintCallable, Category = "ComfyUI|File")
-    static bool Save3DModelToFile(const TArray<uint8>& ModelData, const FString& FilePath, EComfyUI3DFormat Format = EComfyUI3DFormat::GLB);
-
-    // 保存3D模型到项目资产（通过Datasmith或其他导入系统）
-    UFUNCTION(BlueprintCallable, Category = "ComfyUI|File")
-    static bool Save3DModelToProject(const TArray<uint8>& ModelData, const FString& AssetName, const FString& PackagePath = TEXT("/Game/ComfyUI/Generated/Models"));
-
-    // 验证3D文件格式
-    UFUNCTION(BlueprintCallable, Category = "ComfyUI|File")
-    static bool ValidateF3DFormat(const TArray<uint8>& ModelData, EComfyUI3DFormat Format);
-
-    // === 纹理集操作 ===
-    // 保存单个纹理（简化版本，避免TMap模板问题）
-    UFUNCTION(BlueprintCallable, Category = "ComfyUI|File")
-    static bool SaveGeneratedTexture(UTexture2D* Texture, const FString& BaseName, const FString& PackagePath = TEXT("/Game/ComfyUI/Generated/Textures"));
-
-    // 创建材质实例从纹理
-    UFUNCTION(BlueprintCallable, Category = "ComfyUI|File")
-    static class UMaterialInstanceDynamic* CreateMaterialFromTexture(UTexture2D* DiffuseTexture, const FString& MaterialName = TEXT("ComfyUI_Material"));
 
     // === JSON文件操作 ===
     // 加载JSON文件内容

@@ -1,6 +1,7 @@
 #include "Client/ComfyUIClient.h"
 #include "Utils/ComfyUIFileManager.h"
 #include "Workflow/ComfyUIWorkflowService.h"
+#include "Asset/ComfyUI3DAssetManager.h"
 #include "HttpModule.h"
 #include "Interfaces/IHttpRequest.h"
 #include "Interfaces/IHttpResponse.h"
@@ -74,97 +75,6 @@ void UComfyUIClient::SetRequestTimeout(float TimeoutSeconds)
     UE_LOG(LogTemp, Log, TEXT("Set request timeout: %.2fs"), RequestTimeoutSeconds);
 }
 
-void UComfyUIClient::GenerateImage(const FString& Prompt, const FString& NegativePrompt, 
-                                  EComfyUIWorkflowType WorkflowType, 
-                                  const FOnImageGenerated& OnComplete,
-                                  const FOnGenerationProgress& OnProgress,
-                                  const FOnGenerationStarted& OnStarted,
-                                  const FOnGenerationCompleted& OnCompleted)
-{
-    // 现在所有工作流都是自定义的，直接调用自定义工作流生成
-    UComfyUIWorkflowService* WorkflowService = UComfyUIWorkflowService::Get();
-    if (!WorkflowService)
-    {
-        UE_LOG(LogTemp, Error, TEXT("WorkflowService not available"));
-        OnComplete.ExecuteIfBound(nullptr);
-        return;
-    }
-
-    TArray<FString> AvailableWorkflows = WorkflowService->GetAvailableWorkflowNames();
-    if (AvailableWorkflows.Num() == 0)
-    {
-        UE_LOG(LogTemp, Error, TEXT("No custom workflows available. Please import a ComfyUI workflow first."));
-        OnComplete.ExecuteIfBound(nullptr);
-        return;
-    }
-    
-    // 使用第一个可用的自定义工作流
-    FString DefaultWorkflowName = AvailableWorkflows[0];
-    UE_LOG(LogTemp, Warning, TEXT("Using default custom workflow: %s"), *DefaultWorkflowName);
-    
-    GenerateImageWithCustomWorkflow(Prompt, NegativePrompt, DefaultWorkflowName, OnComplete, OnProgress, OnStarted, OnCompleted);
-}
-
-void UComfyUIClient::GenerateImageWithCustomWorkflow(const FString& Prompt, const FString& NegativePrompt,
-                                                     const FString& CustomWorkflowName,
-                                                     const FOnImageGenerated& OnComplete,
-                                                     const FOnGenerationProgress& OnProgress,
-                                                     const FOnGenerationStarted& OnStarted,
-                                                     const FOnGenerationCompleted& OnCompleted)
-{
-    OnImageGeneratedCallback = OnComplete;
-    OnGenerationProgressCallback = OnProgress;
-    OnGenerationStartedCallback = OnStarted;
-    OnGenerationCompletedCallback = OnCompleted;
-    
-    // 重置取消状态
-    bIsCancelled = false;
-    
-    // 保存当前操作上下文
-    CurrentPrompt = Prompt;
-    CurrentNegativePrompt = NegativePrompt;
-    CurrentWorkflowType = EComfyUIWorkflowType::Custom;
-    CurrentCustomWorkflowName = CustomWorkflowName;
-    
-    // 重置重试状态
-    ResetRetryState();
-
-    // 使用工作流服务构建自定义工作流JSON
-    UComfyUIWorkflowService* WorkflowService = UComfyUIWorkflowService::Get();
-    if (!WorkflowService)
-    {
-        FComfyUIError Error(EComfyUIErrorType::InvalidWorkflow, 
-                           TEXT("工作流服务不可用"));
-        OnImageGenerationFailedCallback.ExecuteIfBound(Error, false);
-        OnImageGeneratedCallback.ExecuteIfBound(nullptr);
-        return;
-    }
-
-    FString WorkflowJson = WorkflowService->BuildWorkflowJson(CustomWorkflowName, Prompt, NegativePrompt);
-    
-    if (WorkflowJson.IsEmpty() || WorkflowJson == TEXT("{}"))
-    {
-        FComfyUIError Error(EComfyUIErrorType::InvalidWorkflow, 
-                           FString::Printf(TEXT("无法构建自定义工作流JSON: %s"), *CustomWorkflowName));
-        OnImageGenerationFailedCallback.ExecuteIfBound(Error, false);
-        OnImageGeneratedCallback.ExecuteIfBound(nullptr);
-        return;
-    }
-
-    // 使用 NetworkManager 发送请求
-    FString Url = ServerUrl + TEXT("/prompt");
-    UE_LOG(LogTemp, Log, TEXT("GenerateImageWithCustomWorkflow: Sending prompt via NetworkManager to %s"), *Url);
-    
-    EnsureNetworkManagerInitialized();
-    NetworkManager->SendRequest(Url, WorkflowJson,
-        [this](const FString& ResponseContent, bool bSuccess)
-        {
-            // 调用统一的响应处理
-            OnPromptResponse(ResponseContent, bSuccess);
-        }
-    );
-}
-
 void UComfyUIClient::CheckServerStatus()
 {
     // 使用 NetworkManager 检查服务器状态
@@ -217,7 +127,7 @@ void UComfyUIClient::OnPromptSubmitted(FHttpRequestPtr Request, FHttpResponsePtr
     
     if (Error.ErrorType != EComfyUIErrorType::None)
     {
-        HandleRequestError(Error, [this]() { RetryCurrentOperation(); });
+        HandleRequestError(Error, nullptr);
         return;
     }
 
@@ -333,42 +243,86 @@ void UComfyUIClient::OnQueueStatusChecked(const FString& ResponseContent, bool b
             {
                 TSharedPtr<FJsonObject> Outputs = PromptHistory->GetObjectField(TEXT("outputs"));
                 
-                // 查找图像输出节点（通常是SaveImage节点）
+                // 查找输出节点
+                bool bFoundOutput = false;
                 for (auto& OutputPair : Outputs->Values)
                 {
                     TSharedPtr<FJsonObject> OutputNode = OutputPair.Value->AsObject();
-                    if (OutputNode.IsValid() && OutputNode->HasField(TEXT("images")))
+                    if (OutputNode.IsValid())
                     {
-                        const TArray<TSharedPtr<FJsonValue>>* ImagesArray;
-                        if (OutputNode->TryGetArrayField(TEXT("images"), ImagesArray) && ImagesArray->Num() > 0)
+                        // 检查图像输出
+                        if (OutputNode->HasField(TEXT("images")))
                         {
-                            // 获取第一张图片的信息
-                            TSharedPtr<FJsonObject> ImageInfo = (*ImagesArray)[0]->AsObject();
-                            if (ImageInfo.IsValid())
+                            const TArray<TSharedPtr<FJsonValue>>* ImagesArray;
+                            if (OutputNode->TryGetArrayField(TEXT("images"), ImagesArray) && ImagesArray->Num() > 0)
                             {
-                                FString Filename = ImageInfo->GetStringField(TEXT("filename"));
-                                FString Subfolder = ImageInfo->GetStringField(TEXT("subfolder"));
-                                FString Type = ImageInfo->GetStringField(TEXT("type"));
-                                
-                                UE_LOG(LogTemp, Log, TEXT("Found generated image: %s in %s"), *Filename, *Subfolder);
-                                
-                                // 重置重试状态，因为状态检查成功
-                                ResetRetryState();
-                                // 下载图片
-                                DownloadGeneratedImage(Filename, Subfolder, Type);
-                                return;
+                                // 获取第一张图片的信息
+                                TSharedPtr<FJsonObject> ImageInfo = (*ImagesArray)[0]->AsObject();
+                                if (ImageInfo.IsValid())
+                                {
+                                    FString Filename = ImageInfo->GetStringField(TEXT("filename"));
+                                    FString Subfolder = ImageInfo->GetStringField(TEXT("subfolder"));
+                                    FString Type = ImageInfo->GetStringField(TEXT("type"));
+
+                                    UE_LOG(LogTemp, Log, TEXT("Found generated image: %s in %s"), *Filename, *Subfolder);
+
+                                    // 重置重试状态，因为状态检查成功
+                                    ResetRetryState();
+                                    // 下载图片
+                                    DownloadGeneratedImage(Filename, Subfolder, Type);
+                                    bFoundOutput = true;
+                                }
                             }
+                        }
+                    
+                        // 检查3D模型输出
+                        FString MeshFilename;
+                        FString MeshSubfolder;
+                        
+                        // 检查不同的可能输出格式 - 统一处理逻辑
+                        TArray<FString> MeshFieldNames = {TEXT("gltf"), TEXT("glb"), TEXT("meshes"), TEXT("mesh")};
+                        
+                        for (const FString& FieldName : MeshFieldNames)
+                        {
+                            if (OutputNode->HasField(FieldName))
+                            {
+                                const TArray<TSharedPtr<FJsonValue>>* MeshArray;
+                                if (OutputNode->TryGetArrayField(FieldName, MeshArray) && MeshArray->Num() > 0)
+                                {
+                                    TSharedPtr<FJsonObject> MeshInfo = (*MeshArray)[0]->AsObject();
+                                    if (MeshInfo.IsValid())
+                                    {
+                                        MeshFilename = MeshInfo->GetStringField(TEXT("filename"));
+                                        MeshSubfolder = MeshInfo->GetStringField(TEXT("subfolder"));
+                                        break; // 找到第一个有效的就停止
+                                    }
+                                }
+                            }
+                        }
+                        
+                        if (!MeshFilename.IsEmpty())
+                        {
+                            UE_LOG(LogTemp, Log, TEXT("Found generated 3D model: %s in %s"), *MeshFilename, *MeshSubfolder);
+                            
+                            // 重置重试状态
+                            ResetRetryState();
+                            // 下载3D模型
+                            DownloadGenerated3DModel(MeshFilename, MeshSubfolder);
+                            bFoundOutput = true;
                         }
                     }
                 }
+                
+                if (!bFoundOutput)
+                {
+                    // 如果没有找到任何输出，报告错误
+                    FComfyUIError OutputError(EComfyUIErrorType::ServerError, 
+                                            TEXT("生成完成但未找到输出"), 
+                                            0,
+                                            TEXT("检查工作流是否包含输出节点"), false);
+                    HandleRequestError(OutputError, [this]() { RetryCurrentOperation(); });
+                }
             }
-            
-            // 如果没有找到图片输出，报告错误
-            FComfyUIError OutputError(EComfyUIErrorType::ServerError, 
-                                    TEXT("生成完成但未找到图像输出"), 
-                                    0,
-                                    TEXT("检查工作流是否包含SaveImage节点"), false);
-            HandleRequestError(OutputError, [this]() { RetryCurrentOperation(); });
         }
         else
         {
@@ -382,8 +336,8 @@ void UComfyUIClient::OnQueueStatusChecked(const FString& ResponseContent, bool b
             else
             {
                 FComfyUIError ContextError(EComfyUIErrorType::UnknownError, 
-                                         TEXT("无效的世界上下文，无法管理计时器"), 0,
-                                         TEXT("重新启动生成过程"), true);
+                                        TEXT("无效的世界上下文，无法管理计时器"), 0,
+                                        TEXT("重新启动生成过程"), true);
                 HandleRequestError(ContextError, [this]() { RetryCurrentOperation(); });
             }
         }
@@ -391,9 +345,9 @@ void UComfyUIClient::OnQueueStatusChecked(const FString& ResponseContent, bool b
     else
     {
         FComfyUIError JsonError(EComfyUIErrorType::JsonParsingError, 
-                              TEXT("无法解析状态响应的JSON格式"), 
-                              0,
-                              TEXT("检查ComfyUI服务器状态"), true);
+                                TEXT("无法解析状态响应的JSON格式"), 
+                                0,
+                                TEXT("检查ComfyUI服务器状态"), true);
         HandleRequestError(JsonError, [this]() { PollGenerationStatus(CurrentPromptId); });
     }
 }
@@ -450,301 +404,6 @@ void UComfyUIClient::OnImageDownloaded(const TArray<uint8>& ImageData, bool bWas
                                  TEXT("检查图像格式是否支持，或尝试重新生成"), true);
         HandleRequestError(TextureError, [this]() { RetryCurrentOperation(); });
     }
-}
-
-// ========== 新的3D和纹理生成方法实现 ==========
-
-void UComfyUIClient::Generate3DModel(const FString& Prompt, const FString& NegativePrompt,
-                                     const FOn3DModelGenerated& OnComplete,
-                                     const FOnGenerationProgress& OnProgress,
-                                     const FOnGenerationStarted& OnStarted,
-                                     const FOnGenerationCompleted& OnCompleted)
-{
-    UE_LOG(LogTemp, Log, TEXT("Starting 3D model generation with prompt: %s"), *Prompt);
-    
-    // 设置回调
-    On3DModelGeneratedCallback = OnComplete;
-    OnGenerationProgressCallback = OnProgress;
-    OnGenerationStartedCallback = OnStarted;
-    OnGenerationCompletedCallback = OnCompleted;
-    
-    // 设置生成类型
-    CurrentGenerationType = EGenerationType::Model3D;
-    
-    // 开始生成
-    StartGeneration(EComfyUIWorkflowType::TextTo3D, Prompt, NegativePrompt);
-}
-
-void UComfyUIClient::Generate3DModelFromImage(const FString& Prompt, const FString& NegativePrompt,
-                                             const FString& InputImagePath,
-                                             const FOn3DModelGenerated& OnComplete,
-                                             const FOnGenerationProgress& OnProgress,
-                                             const FOnGenerationStarted& OnStarted,
-                                             const FOnGenerationCompleted& OnCompleted)
-{
-    UE_LOG(LogTemp, Log, TEXT("Starting image-to-3D generation with prompt: %s, image: %s"), *Prompt, *InputImagePath);
-    
-    // 验证输入图像文件存在
-    if (!FPaths::FileExists(InputImagePath))
-    {
-        UE_LOG(LogTemp, Error, TEXT("Input image file does not exist: %s"), *InputImagePath);
-        FComfyUIError ImageError(EComfyUIErrorType::InvalidWorkflow,
-                               FString::Printf(TEXT("输入图像文件不存在: %s"), *InputImagePath),
-                               0,
-                               TEXT("请检查图像文件路径是否正确"));
-        OnComplete.ExecuteIfBound(TArray<uint8>());
-        return;
-    }
-    
-    // 设置回调
-    On3DModelGeneratedCallback = OnComplete;
-    OnGenerationProgressCallback = OnProgress;
-    OnGenerationStartedCallback = OnStarted;
-    OnGenerationCompletedCallback = OnCompleted;
-    
-    // 设置生成类型
-    CurrentGenerationType = EGenerationType::Model3D;
-    
-    // 开始生成
-    StartGeneration(EComfyUIWorkflowType::ImageTo3D, Prompt, NegativePrompt, InputImagePath);
-}
-
-void UComfyUIClient::GeneratePBRTextures(const FString& Prompt, const FString& NegativePrompt,
-                                         const FOnTextureGenerated& OnComplete,
-                                         const FOnGenerationProgress& OnProgress,
-                                         const FOnGenerationStarted& OnStarted,
-                                         const FOnGenerationCompleted& OnCompleted)
-{
-    UE_LOG(LogTemp, Log, TEXT("Starting PBR texture generation with prompt: %s"), *Prompt);
-    
-    // 设置回调
-    OnTextureGeneratedCallback = OnComplete;
-    OnGenerationProgressCallback = OnProgress;
-    OnGenerationStartedCallback = OnStarted;
-    OnGenerationCompletedCallback = OnCompleted;
-    
-    // 设置生成类型
-    CurrentGenerationType = EGenerationType::PBRTextures;
-    
-    // 开始生成
-    StartGeneration(EComfyUIWorkflowType::TextureGeneration, Prompt, NegativePrompt);
-}
-
-void UComfyUIClient::StartGeneration(EComfyUIWorkflowType WorkflowType, const FString& Prompt, const FString& NegativePrompt, const FString& InputImagePath)
-{
-    // 保存当前生成参数
-    CurrentPrompt = Prompt;
-    CurrentNegativePrompt = NegativePrompt;
-    CurrentWorkflowType = WorkflowType;
-    CurrentInputImagePath = InputImagePath;
-    
-    // 重置重试状态
-    ResetRetryState();
-    
-    // 根据工作流类型选择合适的模板
-    FString WorkflowName;
-    switch (WorkflowType)
-    {
-    case EComfyUIWorkflowType::TextTo3D:
-        WorkflowName = TEXT("text_to_3d");
-        break;
-    case EComfyUIWorkflowType::ImageTo3D:
-        WorkflowName = TEXT("image_to_3d");
-        break;
-    case EComfyUIWorkflowType::TextureGeneration:
-        WorkflowName = TEXT("texture_generation");
-        break;
-    default:
-        UE_LOG(LogTemp, Error, TEXT("Unsupported workflow type for this generation method"));
-        return;
-    }
-    
-    // 使用自定义工作流生成
-    GenerateImageWithCustomWorkflow(Prompt, NegativePrompt, WorkflowName,
-        FOnImageGenerated(), // 不使用图像回调
-        OnGenerationProgressCallback,
-        OnGenerationStartedCallback,
-        OnGenerationCompletedCallback
-    );
-}
-
-void UComfyUIClient::OnDataDownloaded(const TArray<uint8>& Data, bool bWasSuccessful)
-{
-    if (!bWasSuccessful)
-    {
-        FComfyUIError DownloadError(EComfyUIErrorType::ImageDownloadFailed,
-                                  TEXT("数据下载失败"),
-                                  0,
-                                  TEXT("检查服务器状态，数据可能已生成但下载失败"), true);
-        HandleRequestError(DownloadError, [this]() { 
-            RetryCurrentOperation(); 
-        });
-        return;
-    }
-    
-    UE_LOG(LogTemp, Log, TEXT("Downloaded data: %d bytes, type: %d"), Data.Num(), (int32)CurrentGenerationType);
-    
-    if (Data.Num() == 0)
-    {
-        FComfyUIError EmptyDataError(EComfyUIErrorType::ImageDownloadFailed,
-                                   TEXT("下载的数据为空"),
-                                   0,
-                                   TEXT("检查生成的数据是否有效"), true);
-        HandleRequestError(EmptyDataError, [this]() { RetryCurrentOperation(); });
-        return;
-    }
-    
-    // 根据当前生成类型处理数据
-    switch (CurrentGenerationType)
-    {
-    case EGenerationType::Image:
-        ProcessImageData(Data);
-        break;
-    case EGenerationType::Model3D:
-        Process3DModelData(Data);
-        break;
-    case EGenerationType::PBRTextures:
-        // TODO: 实现PBR纹理数据处理
-        ProcessPBRTextureData(Data, TEXT("diffuse"));
-        break;
-    default:
-        UE_LOG(LogTemp, Warning, TEXT("Unknown generation type, treating as image"));
-        ProcessImageData(Data);
-        break;
-    }
-}
-
-void UComfyUIClient::ProcessImageData(const TArray<uint8>& ImageData)
-{
-    // 使用原有的图像处理逻辑
-    OnImageDownloaded(ImageData, true);
-}
-
-void UComfyUIClient::Process3DModelData(const TArray<uint8>& ModelData)
-{
-    UE_LOG(LogTemp, Log, TEXT("Processing 3D model data: %d bytes"), ModelData.Num());
-    
-    // 验证模型数据格式（假设为GLB格式）
-    if (!UComfyUIFileManager::ValidateF3DFormat(ModelData, EComfyUI3DFormat::GLB))
-    {
-        UE_LOG(LogTemp, Warning, TEXT("3D model format validation failed, proceeding anyway"));
-    }
-    
-    // 成功完成，重置重试状态
-    ResetRetryState();
-    
-    // 通知生成完成
-    OnGenerationCompletedCallback.ExecuteIfBound();
-    
-    // 通知3D模型生成完成
-    On3DModelGeneratedCallback.ExecuteIfBound(ModelData);
-}
-
-void UComfyUIClient::ProcessPBRTextureData(const TArray<uint8>& TextureData, const FString& TextureType)
-{
-    UE_LOG(LogTemp, Log, TEXT("Processing PBR texture data (%s): %d bytes"), *TextureType, TextureData.Num());
-    
-    // 简化处理，创建单个纹理
-    UTexture2D* GeneratedTexture = UComfyUIFileManager::CreateTextureFromImageData(TextureData);
-    if (GeneratedTexture)
-    {
-        // 成功完成，重置重试状态
-        ResetRetryState();
-        
-        // 通知生成完成
-        OnGenerationCompletedCallback.ExecuteIfBound();
-        
-        // 通知纹理生成完成
-        OnTextureGeneratedCallback.ExecuteIfBound(GeneratedTexture);
-    }
-    else
-    {
-        FComfyUIError TextureError(EComfyUIErrorType::ImageDownloadFailed,
-                                 TEXT("无法从纹理数据创建纹理"),
-                                 0,
-                                 TEXT("检查纹理格式是否支持"), true);
-        HandleRequestError(TextureError, [this]() { RetryCurrentOperation(); });
-    }
-}
-
-UTexture2D* UComfyUIClient::CreateTextureFromImageData(const TArray<uint8>& ImageData)
-{
-    if (ImageData.Num() == 0)
-    {
-        UE_LOG(LogTemp, Error, TEXT("Empty image data"));
-        return nullptr;
-    }
-
-    // 使用ImageWrapper模块来解码图像
-    IImageWrapperModule& ImageWrapperModule = FModuleManager::LoadModuleChecked<IImageWrapperModule>(FName("ImageWrapper"));
-    
-    // 尝试不同的图像格式
-    TArray<EImageFormat> FormatsToTry = {
-        EImageFormat::PNG,
-        EImageFormat::JPEG,
-        EImageFormat::BMP,
-        EImageFormat::TIFF
-    };
-    
-    for (EImageFormat Format : FormatsToTry)
-    {
-        TSharedPtr<IImageWrapper> ImageWrapper = ImageWrapperModule.CreateImageWrapper(Format);
-        if (!ImageWrapper.IsValid())
-        {
-            continue;
-        }
-
-        if (ImageWrapper->SetCompressed(ImageData.GetData(), ImageData.Num()))
-        {
-            UE_LOG(LogTemp, Log, TEXT("Successfully decoded image as format: %d"), static_cast<int32>(Format));
-            
-            TArray<uint8> UncompressedBGRA;
-            if (ImageWrapper->GetRaw(ERGBFormat::BGRA, 8, UncompressedBGRA))
-            {
-                // 创建纹理
-                int32 Width = ImageWrapper->GetWidth();
-                int32 Height = ImageWrapper->GetHeight();
-                
-                UE_LOG(LogTemp, Log, TEXT("Creating texture: %dx%d"), Width, Height);
-                
-                // 创建一个可持久化的纹理，而不是临时纹理
-                UTexture2D* Texture = NewObject<UTexture2D>();
-                if (Texture)
-                {
-                    // 初始化纹理源数据
-                    Texture->Source.Init(Width, Height, 1, 1, TSF_BGRA8, UncompressedBGRA.GetData());
-                    
-                    // 设置纹理属性
-                    Texture->CompressionSettings = TextureCompressionSettings::TC_Default;
-                    Texture->Filter = TextureFilter::TF_Default;
-                    Texture->AddressX = TextureAddress::TA_Clamp;
-                    Texture->AddressY = TextureAddress::TA_Clamp;
-                    Texture->LODGroup = TextureGroup::TEXTUREGROUP_UI;
-                    Texture->SRGB = true;
-                    Texture->MipGenSettings = TMGS_NoMipmaps;
-                    
-                    // 标记为需要更新，并触发立即构建
-                    Texture->PostEditChange();
-                    Texture->UpdateResource();
-                    
-                    UE_LOG(LogTemp, Log, TEXT("Persistent texture created successfully with %d mips"), 
-                           Texture->GetPlatformData() ? Texture->GetPlatformData()->Mips.Num() : 0);
-                    return Texture;
-                }
-                else
-                {
-                    UE_LOG(LogTemp, Error, TEXT("Failed to create UTexture2D"));
-                }
-            }
-            else
-            {
-                UE_LOG(LogTemp, Error, TEXT("Failed to get raw image data"));
-            }
-        }
-    }
-
-    UE_LOG(LogTemp, Error, TEXT("Failed to decode image data with any supported format"));
-    return nullptr;
 }
 
 void UComfyUIClient::DownloadGeneratedImage(const FString& Filename, const FString& Subfolder, const FString& Type)
@@ -870,24 +529,10 @@ void UComfyUIClient::HandleRequestError(const FComfyUIError& Error, TFunction<vo
         UE_LOG(LogTemp, Error, TEXT("Final error after %d attempts: %s"), 
                CurrentRetryCount, *UserFriendlyMessage);
                
-        OnImageGenerationFailedCallback.ExecuteIfBound(Error, false);
+        OnGenerationFailedCallback.ExecuteIfBound(Error, false);
         OnImageGeneratedCallback.ExecuteIfBound(nullptr);
         
         ResetRetryState();
-    }
-}
-
-void UComfyUIClient::RetryCurrentOperation()
-{
-    if (CurrentWorkflowType == EComfyUIWorkflowType::Custom && !CurrentCustomWorkflowName.IsEmpty())
-    {
-        GenerateImageWithCustomWorkflow(CurrentPrompt, CurrentNegativePrompt, 
-                                       CurrentCustomWorkflowName, OnImageGeneratedCallback);
-    }
-    else
-    {
-        GenerateImage(CurrentPrompt, CurrentNegativePrompt, 
-                     CurrentWorkflowType, OnImageGeneratedCallback);
     }
 }
 
@@ -1056,4 +701,159 @@ FComfyUIProgressInfo UComfyUIClient::ParseQueueStatus(const FString& ResponseCon
     ProgressInfo.StatusMessage = TEXT("检查完成状态..");
     ProgressInfo.ProgressPercentage = 0.8f;
     return ProgressInfo;
+}
+void UComfyUIClient::RetryCurrentOperation()
+{
+    // 重新提交当前的提示请求
+    // 注意：这是一个简化的重试实现，应该根据实际的操作类型来决定重试逻辑
+    if (!CurrentPromptId.IsEmpty())
+    {
+        // 如果有当前的提示ID，继续轮询状态
+        PollGenerationStatus(CurrentPromptId);
+    }
+    else
+    {
+        // 如果没有提示ID，说明可能是提交提示失败了
+        // 这里应该重新提交提示，但需要更多上下文信息
+        // 暂时记录错误并调用失败回调
+        UE_LOG(LogTemp, Warning, TEXT("RetryCurrentOperation called but no operation context available"));
+        
+        FComfyUIError Error;
+        Error.ErrorType = EComfyUIErrorType::UnknownError;
+        Error.ErrorMessage = TEXT("No operation context for retry");
+        
+        OnGenerationFailedCallback.ExecuteIfBound(Error, false);
+    }
+}
+
+void UComfyUIClient::ExecuteWorkflow(const FString& WorkflowJson, 
+                                   const FOnGenerationStarted& OnStarted,
+                                   const FOnGenerationProgress& OnProgress,
+                                   const FOnImageGenerated& OnImageGenerated,
+                                   const FOnMeshGenerated& OnMeshGenerated,
+                                   const FOnGenerationFailed& OnFailed,
+                                   const FOnGenerationCompleted& OnCompleted)
+{
+    // 设置回调
+    OnGenerationStartedCallback = OnStarted;
+    OnGenerationProgressCallback = OnProgress;
+    OnImageGeneratedCallback = OnImageGenerated;
+    OnMeshGeneratedCallback = OnMeshGenerated;
+    OnGenerationFailedCallback = OnFailed;
+    OnGenerationCompletedCallback = OnCompleted;
+    
+    // 重置状态
+    ResetRetryState();
+    bIsCancelled = false;
+    
+    // 确保NetworkManager已初始化
+    EnsureNetworkManagerInitialized();
+    
+    // 触发开始回调
+    if (OnGenerationStartedCallback.IsBound())
+    {
+        OnGenerationStartedCallback.ExecuteIfBound(TEXT("workflow_execution_started"));
+    }
+    
+    // 发送工作流JSON到ComfyUI服务器
+    FString PromptEndpoint = ServerUrl + TEXT("/prompt");
+    NetworkManager->SendRequest(PromptEndpoint, WorkflowJson, [this](const FString& Response, bool bSuccess) {
+        if (!bIsCancelled)
+        {
+            OnPromptResponse(Response, bSuccess);
+        }
+    });
+}
+
+void UComfyUIClient::UploadImage(const TArray<uint8>& ImageData, const FString& FileName, 
+                                TFunction<void(const FString& UploadedImageName, bool bSuccess)> Callback)
+{
+    // 确保NetworkManager已初始化
+    EnsureNetworkManagerInitialized();
+    
+    // 使用NetworkManager上传图像
+    NetworkManager->UploadImage(ServerUrl, ImageData, FileName, Callback);
+}
+
+void UComfyUIClient::DownloadGenerated3DModel(const FString& Filename, const FString& Subfolder)
+{
+    // 构建3D模型下载URL
+    FString ModelUrl = ServerUrl + TEXT("/view");
+    
+    // 添加查询参数
+    TArray<FString> QueryParams;
+    QueryParams.Add(FString::Printf(TEXT("filename=%s"), *Filename));
+    if (!Subfolder.IsEmpty())
+    {
+        QueryParams.Add(FString::Printf(TEXT("subfolder=%s"), *Subfolder));
+    }
+    QueryParams.Add(TEXT("type=output"));
+    
+    if (QueryParams.Num() > 0)
+    {
+        ModelUrl += TEXT("?") + FString::Join(QueryParams, TEXT("&"));
+    }
+    
+    UE_LOG(LogTemp, Log, TEXT("Downloading 3D model from: %s"), *ModelUrl);
+    
+    // 使用NetworkManager下载3D模型
+    EnsureNetworkManagerInitialized();
+    if (NetworkManager)
+    {
+        NetworkManager->DownloadImage(ModelUrl, [this, Filename](const TArray<uint8>& ModelData, bool bSuccess) {
+            On3DModelDownloaded(ModelData, bSuccess, Filename);
+        });
+    }
+    else
+    {
+        FComfyUIError NetworkError(EComfyUIErrorType::UnknownError, 
+                                 TEXT("NetworkManager未初始化"), 
+                                 0,
+                                 TEXT("请检查插件初始化流程"), false);
+        HandleRequestError(NetworkError, [this]() { RetryCurrentOperation(); });
+    }
+}
+
+void UComfyUIClient::On3DModelDownloaded(const TArray<uint8>& ModelData, bool bWasSuccessful, const FString& Filename)
+{
+    if (!bWasSuccessful || ModelData.Num() == 0)
+    {
+        FComfyUIError DownloadError(EComfyUIErrorType::ServerError, 
+                                  TEXT("无法下载3D模型文件"), 
+                                  0,
+                                  TEXT("检查网络连接和文件权限"), true);
+        HandleRequestError(DownloadError, [this]() { RetryCurrentOperation(); });
+        return;
+    }
+    
+    UE_LOG(LogTemp, Log, TEXT("Successfully downloaded 3D model: %d bytes"), ModelData.Num());
+    
+    // 从文件名判断格式
+    FString FileExtension = FPaths::GetExtension(Filename).ToLower();
+    
+    // 使用3D资产管理器创建StaticMesh
+    UComfyUI3DAssetManager* AssetManager = NewObject<UComfyUI3DAssetManager>();
+    UStaticMesh* GeneratedMesh = AssetManager->CreateStaticMeshFromData(ModelData, FileExtension);
+    
+    if (GeneratedMesh)
+    {
+        UE_LOG(LogTemp, Log, TEXT("Successfully created 3D mesh from downloaded data"));
+        
+        // 成功完成，重置重试状态
+        ResetRetryState();
+        
+        // 通知生成完成
+        OnGenerationCompletedCallback.ExecuteIfBound();
+        
+        // 最后通知3D模型生成完成
+        OnMeshGeneratedCallback.ExecuteIfBound(GeneratedMesh);
+    }
+    else
+    {
+        FComfyUIError MeshError(EComfyUIErrorType::ServerError, 
+                              TEXT("无法从3D模型数据创建StaticMesh"), 
+                              0,
+                              TEXT("检查模型格式是否支持，或尝试重新生成"), true);
+        HandleRequestError(MeshError, [this]() { RetryCurrentOperation(); });
+    }
 }

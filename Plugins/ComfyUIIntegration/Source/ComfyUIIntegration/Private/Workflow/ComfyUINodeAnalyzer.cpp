@@ -26,6 +26,7 @@ void UComfyUINodeAnalyzer::InitializeNodeTypeMappings()
     TextInputParameters.Empty();
     ImageInputParameters.Empty();
     NumberInputParameters.Empty();
+    MeshInputParameters.Empty();
 
     // 初始化节点类型到输出类型的映射
     NodeTypeToOutputType.Add(TEXT("SaveImage"), EComfyUINodeOutputType::Image);
@@ -40,11 +41,21 @@ void UComfyUINodeAnalyzer::InitializeNodeTypeMappings()
     NodeTypeToOutputType.Add(TEXT("OBJExport"), EComfyUINodeOutputType::Mesh);
     NodeTypeToOutputType.Add(TEXT("PLYExport"), EComfyUINodeOutputType::Mesh);
     
+    // HunyuanI3D特定节点
+    NodeTypeToOutputType.Add(TEXT("Hy3D21ExportMesh"), EComfyUINodeOutputType::Mesh);
+    NodeTypeToOutputType.Add(TEXT("Hy3DInPaint"), EComfyUINodeOutputType::Mesh);
+    NodeTypeToOutputType.Add(TEXT("Preview3D"), EComfyUINodeOutputType::Mesh);
+    NodeTypeToOutputType.Add(TEXT("Hy3D21VAEDecode"), EComfyUINodeOutputType::Mesh);
+    
     // 纹理/材质输出节点
     NodeTypeToOutputType.Add(TEXT("SaveTexture"), EComfyUINodeOutputType::Texture);
     NodeTypeToOutputType.Add(TEXT("SaveMaterial"), EComfyUINodeOutputType::Material);
     NodeTypeToOutputType.Add(TEXT("TextureOutput"), EComfyUINodeOutputType::Texture);
     NodeTypeToOutputType.Add(TEXT("MaterialOutput"), EComfyUINodeOutputType::Material);
+    
+    // HunyuanI3D纹理相关节点
+    NodeTypeToOutputType.Add(TEXT("Hy3DBakeMultiViews"), EComfyUINodeOutputType::Texture);
+    NodeTypeToOutputType.Add(TEXT("Hy3DMultiViewsGenerator"), EComfyUINodeOutputType::Texture);
 
     // 初始化已知的输入参数类型
     
@@ -60,6 +71,11 @@ void UComfyUINodeAnalyzer::InitializeNodeTypeMappings()
     TextInputParameters.Add(TEXT("ckpt_name"));
     TextInputParameters.Add(TEXT("sampler_name"));
     TextInputParameters.Add(TEXT("scheduler"));
+    
+    // HunyuanI3D特定文本参数
+    TextInputParameters.Add(TEXT("output_mesh_name"));
+    TextInputParameters.Add(TEXT("model_file"));
+    TextInputParameters.Add(TEXT("image"));
 
     // 图像参数
     ImageInputParameters.Add(TEXT("image"));
@@ -69,6 +85,11 @@ void UComfyUINodeAnalyzer::InitializeNodeTypeMappings()
     ImageInputParameters.Add(TEXT("mask"));
     ImageInputParameters.Add(TEXT("pixels"));
     ImageInputParameters.Add(TEXT("images"));
+    
+    // HunyuanI3D特定图像参数
+    ImageInputParameters.Add(TEXT("image_with_alpha"));
+    ImageInputParameters.Add(TEXT("albedo"));
+    ImageInputParameters.Add(TEXT("mr"));
 
     // 数值参数
     NumberInputParameters.Add(TEXT("seed"));
@@ -83,6 +104,16 @@ void UComfyUINodeAnalyzer::InitializeNodeTypeMappings()
     NumberInputParameters.Add(TEXT("guidance_scale"));
     NumberInputParameters.Add(TEXT("num_inference_steps"));
     NumberInputParameters.Add(TEXT("noise_level"));
+
+    // 网格参数
+    MeshInputParameters.Add(TEXT("mesh"));
+    MeshInputParameters.Add(TEXT("trimesh"));
+    MeshInputParameters.Add(TEXT("mesh_file"));
+    MeshInputParameters.Add(TEXT("model_file"));
+    MeshInputParameters.Add(TEXT("glb_path"));
+    MeshInputParameters.Add(TEXT("obj_path"));
+    MeshInputParameters.Add(TEXT("geometry"));
+    MeshInputParameters.Add(TEXT("input_mesh"));
 }
 
 bool UComfyUINodeAnalyzer::AnalyzeWorkflow(TSharedPtr<FJsonObject> WorkflowJson, TArray<FWorkflowInputInfo>& OutInputs, TArray<FWorkflowOutputInfo>& OutOutputs)
@@ -304,6 +335,11 @@ EComfyUINodeInputType UComfyUINodeAnalyzer::DetermineInputType(const FString& No
         return EComfyUINodeInputType::Number;
     }
     
+    if (MeshInputParameters.Contains(LowerParameterName))
+    {
+        return EComfyUINodeInputType::Mesh;
+    }
+    
     // 基于占位符名称推断
     if (IsPlaceholderValue(Value))
     {
@@ -317,6 +353,13 @@ EComfyUINodeInputType UComfyUINodeAnalyzer::DetermineInputType(const FString& No
         if (PlaceholderName.Contains(TEXT("image")))
         {
             return EComfyUINodeInputType::Image;
+        }
+        
+        if (PlaceholderName.Contains(TEXT("mesh")) || 
+            PlaceholderName.Contains(TEXT("3d")) ||
+            PlaceholderName.Contains(TEXT("model")))
+        {
+            return EComfyUINodeInputType::Mesh;
         }
     }
     
@@ -333,6 +376,17 @@ EComfyUINodeInputType UComfyUINodeAnalyzer::DetermineInputType(const FString& No
         LowerParameterName.Contains(TEXT("pixel")))
     {
         return EComfyUINodeInputType::Image;
+    }
+    
+    if (LowerParameterName.Contains(TEXT("mesh")) ||
+        LowerParameterName.Contains(TEXT("3d")) ||
+        LowerParameterName.Contains(TEXT("model")) ||
+        LowerParameterName.Contains(TEXT("geometry")) ||
+        LowerParameterName.Contains(TEXT("obj")) ||
+        LowerParameterName.Contains(TEXT("glb")) ||
+        LowerParameterName.Contains(TEXT("ply")))
+    {
+        return EComfyUINodeInputType::Mesh;
     }
     
     return EComfyUINodeInputType::Unknown;
@@ -455,8 +509,10 @@ EComfyUIWorkflowType UComfyUINodeAnalyzer::DetermineWorkflowType(const TArray<FW
     // 统计输入类型
     bool bHasTextInput = false;
     bool bHasImageInput = false;
+    bool bHasMeshInput = false;
     int32 TextInputCount = 0;
     int32 ImageInputCount = 0;
+    int32 MeshInputCount = 0;
     
     for (const FWorkflowInputInfo& Input : Inputs)
     {
@@ -469,6 +525,11 @@ EComfyUIWorkflowType UComfyUINodeAnalyzer::DetermineWorkflowType(const TArray<FW
         {
             bHasImageInput = true;
             ImageInputCount++;
+        }
+        else if (Input.InputType == EComfyUINodeInputType::Mesh)
+        {
+            bHasMeshInput = true;
+            MeshInputCount++;
         }
     }
     
@@ -500,7 +561,12 @@ EComfyUIWorkflowType UComfyUINodeAnalyzer::DetermineWorkflowType(const TArray<FW
     if (bHasMeshOutput)
     {
         // 3D输出工作流
-        if (bHasImageInput)
+        if (bHasMeshInput && (bHasImageInput || bHasTextureOutput))
+        {
+            // 有网格输入且有图像输入或纹理输出，是网格纹理化工作流
+            return EComfyUIWorkflowType::MeshTexturing;
+        }
+        else if (bHasImageInput)
         {
             return EComfyUIWorkflowType::ImageTo3D;
         }
@@ -512,7 +578,12 @@ EComfyUIWorkflowType UComfyUINodeAnalyzer::DetermineWorkflowType(const TArray<FW
     else if (bHasTextureOutput)
     {
         // 纹理生成工作流
-        return EComfyUIWorkflowType::TextureGeneration;
+        if (bHasMeshInput)
+        {
+            // 有网格输入的纹理生成，是网格纹理化
+            return EComfyUIWorkflowType::MeshTexturing;
+        }
+        return EComfyUIWorkflowType::MeshTexturing;
     }
     else if (bHasImageOutput)
     {
@@ -534,8 +605,8 @@ EComfyUIWorkflowType UComfyUINodeAnalyzer::DetermineWorkflowType(const TArray<FW
         }
     }
     
-    UE_LOG(LogTemp, Warning, TEXT("UComfyUINodeAnalyzer::DetermineWorkflowType - Unable to determine workflow type. Inputs: %d text, %d image. Outputs: %s%s%s"), 
-           TextInputCount, ImageInputCount,
+    UE_LOG(LogTemp, Warning, TEXT("UComfyUINodeAnalyzer::DetermineWorkflowType - Unable to determine workflow type. Inputs: %d text, %d image, %d mesh. Outputs: %s%s%s"), 
+           TextInputCount, ImageInputCount, MeshInputCount,
            bHasImageOutput ? TEXT("Image ") : TEXT(""),
            bHasMeshOutput ? TEXT("Mesh ") : TEXT(""),
            bHasTextureOutput ? TEXT("Texture ") : TEXT(""));

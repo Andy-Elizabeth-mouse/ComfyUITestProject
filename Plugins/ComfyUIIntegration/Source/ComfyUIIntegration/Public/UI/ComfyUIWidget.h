@@ -53,6 +53,9 @@ private:
     /** 输入图像（用于图生图等工作流） */
     UTexture2D* InputImage = nullptr;
     TSharedPtr<FSlateBrush> InputImageBrush;
+    
+    /** 输入模型路径（用于纹理生成等工作流） */
+    FString InputModelPath;
 
     /** UI组件 */
     TSharedPtr<SMultiLineEditableTextBox> PromptTextBox;
@@ -83,6 +86,11 @@ private:
     TSharedPtr<SButton> LoadImageButton;
     TSharedPtr<SButton> ClearImageButton;
 
+    /** 模型输入相关UI组件 */
+    TSharedPtr<SEditableTextBox> ModelPathTextBox;
+    TSharedPtr<SButton> LoadModelButton;
+    TSharedPtr<SButton> ClearModelButton;
+
     /** 生成的图像预览 */
     TSharedPtr<class SImage> ImagePreview;
     UTexture2D* GeneratedTexture;
@@ -98,6 +106,7 @@ private:
     TSharedRef<SWidget> CreateProgressWidget();
     TSharedRef<SWidget> CreateImagePreviewWidget();
     TSharedRef<SWidget> CreateInputImageWidget();
+    TSharedRef<SWidget> CreateModelInputWidget();
 
     /** 事件处理 */
     FReply OnGenerateClicked();
@@ -110,6 +119,8 @@ private:
     FReply OnValidateWorkflowClicked();
     FReply OnLoadImageClicked();
     FReply OnClearImageClicked();
+    FReply OnLoadModelClicked();
+    FReply OnClearModelClicked();
     
     /** 拖拽图像处理 */
     void OnImageDropped(UTexture2D* DroppedTexture);
@@ -130,12 +141,17 @@ private:
     void DetectWorkflowType(const FString& WorkflowName);
     EComfyUIWorkflowType AnalyzEComfyUIWorkflowTypeFromConfig(const FWorkflowConfig& Config);
     
+    /** 检查当前工作流是否需要图像输入 */
+    bool DoesCurrentWorkflowNeedImage() const;
+    
     /** 计算图片在指定容器中的适配大小（保持比例） */
     FVector2D CalculateImageFitSize(const FVector2D& ImageSize, const FVector2D& ContainerSize) const;
     
     /** UI可见性控制 */
     EVisibility GetCustomWorkflowVisibility() const;
     EVisibility GetInputImageVisibility() const;
+    EVisibility GetModelInputVisibility() const;
+    EVisibility GetPromptInputVisibility() const;
     EVisibility GetProgressVisibility() const;
     EVisibility GetCancelButtonVisibility() const;
     FText GetCurrentWorkflowTypeText() const;
@@ -159,15 +175,6 @@ private:
     void OnGenerationProgressUpdate(const FComfyUIProgressInfo& ProgressInfo);
     void OnGenerationStarted(const FString& PromptId);
     void OnGenerationCompleted();
-    
-    /** 3D模型生成回调 */
-    void On3DModelGenerationComplete(const TArray<uint8>& ModelData);
-    
-    /** PBR纹理集生成回调 */
-    void OnTextureGenerationComplete(UTexture2D* NewGeneratedTexture);
-    
-    /** 获取输入图像路径（用于图生3D） */
-    FString GetSelectedInputImagePath() const;
     
     /** 文件保存通知 */
     void ShowSaveSuccessNotification(const FString& AssetPath);

@@ -65,10 +65,6 @@ public:
     UFUNCTION(BlueprintCallable, Category = "ComfyUI|Workflow")
     bool UpdateWorkflowInputOutputInfo(const FString& WorkflowName);
 
-    /** 运行工作流测试 */
-    UFUNCTION(BlueprintCallable, Category = "ComfyUI|Test")
-    bool RunWorkflowTests();
-
     // ========== 工作流导入和导出 ==========
     
     /** 导入工作流文件 */

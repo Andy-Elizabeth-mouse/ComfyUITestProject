@@ -1,44 +1,51 @@
 {
     "1": {
         "inputs": {
-            "image": "{INPUT_IMAGE}",
-            "strength": 0.8,
-            "guidance_scale": 7.5,
-            "num_inference_steps": 40
+            "image": "{INPUT_IMAGE}"
         },
         "class_type": "LoadImage"
     },
     "2": {
         "inputs": {
-            "prompt": "{POSITIVE_PROMPT}",
-            "image": ["1", 0],
-            "depth_estimation": true,
-            "camera_elevation": 15,
-            "camera_azimuth": 0
+            "images": ["1", 0],
+            "width": 512,
+            "height": 512,
+            "crop": "center"
         },
-        "class_type": "ImageTo3DNode"
+        "class_type": "ImageScale"
     },
     "3": {
         "inputs": {
-            "image_to_3d_result": ["2", 0],
-            "output_format": "glb",
-            "texture_size": 1024,
-            "mesh_resolution": "high"
+            "image": ["2", 0],
+            "depth_model": "DPT-Hybrid-MiDaS",
+            "compute_normal": true
         },
-        "class_type": "3DModelProcessor"
+        "class_type": "DepthEstimation"
     },
     "4": {
         "inputs": {
-            "3d_model": ["3", 0],
-            "optimize_for_game": true,
-            "generate_lods": true
+            "image": ["2", 0],
+            "depth": ["3", 0],
+            "normal": ["3", 1],
+            "method": "poisson",
+            "depth_scale": 0.1,
+            "smooth_iterations": 3
         },
-        "class_type": "MeshOptimizer"
+        "class_type": "ImageTo3DMesh"
     },
     "5": {
         "inputs": {
-            "optimized_model": ["4", 0],
-            "filename_prefix": "ComfyUI_Img2_3D"
+            "mesh": ["4", 0],
+            "texture": ["2", 0],
+            "uv_method": "smart_projection"
+        },
+        "class_type": "ApplyTexture"
+    },
+    "6": {
+        "inputs": {
+            "filename_prefix": "image_to_3d",
+            "mesh_data": ["5", 0],
+            "format": "obj"
         },
         "class_type": "Save3DModel"
     }

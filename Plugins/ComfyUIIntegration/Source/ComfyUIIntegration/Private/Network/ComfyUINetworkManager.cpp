@@ -5,6 +5,11 @@
 #include "Engine/World.h"
 #include "TimerManager.h"
 
+UComfyUINetworkManager::UComfyUINetworkManager()
+{
+    HttpModule = &FHttpModule::Get();
+}
+#pragma optimize("", off)
 void UComfyUINetworkManager::SendRequest(const FString& Url, const FString& Payload, TFunction<void(const FString& Response, bool bSuccess)> Callback)
 {
     // 构建HTTP请求
@@ -40,7 +45,7 @@ void UComfyUINetworkManager::SendRequest(const FString& Url, const FString& Payl
     );
     Request->ProcessRequest();
 }
-
+#pragma optimize("", on)
 void UComfyUINetworkManager::SendGetRequest(const FString& Url, TFunction<void(const FString& Response, bool bSuccess)> Callback, float TimeoutSeconds)
 {
     if (!HttpModule)
@@ -110,7 +115,84 @@ void UComfyUINetworkManager::DownloadImage(const FString& Url, TFunction<void(co
     );
     Request->ProcessRequest();
 }
+#pragma optimize("", off)
+void UComfyUINetworkManager::UploadImage(const FString& ServerUrl, const TArray<uint8>& ImageData, const FString& FileName, TFunction<void(const FString& UploadedImageName, bool bSuccess)> Callback)
+{
+    if (!HttpModule)
+    {
+        HttpModule = &FHttpModule::Get();
+    }
+    
+    // 构建上传URL
+    FString UploadUrl = ServerUrl;
+    if (!UploadUrl.EndsWith(TEXT("/")))
+    {
+        UploadUrl += TEXT("/");
+    }
+    UploadUrl += TEXT("upload/image");
+    
+    TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = HttpModule->CreateRequest();
+    Request->SetURL(UploadUrl);
+    Request->SetVerb(TEXT("POST"));
+    Request->SetTimeout(60.0f); // 图片上传需要更长时间
+    
+    // 创建multipart/form-data格式的内容
+    FString Boundary = FString::Printf(TEXT("----UnrealEngine4FormBoundary%d"), FMath::Rand());
+    FString ContentType = FString::Printf(TEXT("multipart/form-data; boundary=%s"), *Boundary);
+    Request->SetHeader(TEXT("Content-Type"), ContentType);
+    
+    // 构建multipart内容
+    TArray<uint8> FormData;
+    
+    // 添加文件字段
+    FString FileHeader = FString::Printf(TEXT("--%s\r\nContent-Disposition: form-data; name=\"image\"; filename=\"%s\"\r\nContent-Type: image/png\r\n\r\n"), *Boundary, *FileName);
+    FormData.Append((uint8*)TCHAR_TO_UTF8(*FileHeader), FileHeader.Len());
+    FormData.Append(ImageData);
+    
+    // 添加结束边界
+    FString EndBoundary = FString::Printf(TEXT("\r\n--%s--\r\n"), *Boundary);
+    FormData.Append((uint8*)TCHAR_TO_UTF8(*EndBoundary), EndBoundary.Len());
+    
+    Request->SetContent(FormData);
 
+    Request->OnProcessRequestComplete().BindLambda(
+        [this, Callback](FHttpRequestPtr Req, FHttpResponsePtr Resp, bool bSuccess)
+        {
+            // 分析HTTP错误
+            FComfyUIError Error = AnalyzeHttpError(Req, Resp, bSuccess);
+            
+            if (Error.ErrorType == EComfyUIErrorType::None)
+            {
+                // 解析响应JSON获取上传的图片名称
+                FString ResponseContent = Resp->GetContentAsString();
+                TSharedPtr<FJsonObject> JsonObject;
+                TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ResponseContent);
+                
+                if (FJsonSerializer::Deserialize(Reader, JsonObject) && JsonObject.IsValid())
+                {
+                    FString UploadedImageName;
+                    if (JsonObject->TryGetStringField(TEXT("name"), UploadedImageName))
+                    {
+                        UE_LOG(LogTemp, Log, TEXT("Image uploaded successfully: %s"), *UploadedImageName);
+                        Callback(UploadedImageName, true);
+                        return;
+                    }
+                }
+                
+                UE_LOG(LogTemp, Warning, TEXT("Image uploaded but failed to parse response: %s"), *ResponseContent);
+                Callback(TEXT(""), false);
+            }
+            else
+            {
+                // 请求失败，记录错误
+                UE_LOG(LogTemp, Warning, TEXT("NetworkManager Image Upload failed: %s"), *Error.ErrorMessage);
+                Callback(TEXT(""), false);
+            }
+        }
+    );
+    Request->ProcessRequest();
+}
+#pragma optimize("", on)
 void UComfyUINetworkManager::PollQueueStatus(const FString& ServerUrl, const FString& PromptId, TFunction<void(const FString& Response, bool bSuccess)> Callback)
 {
     FString StatusUrl = ServerUrl;

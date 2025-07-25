@@ -19,6 +19,7 @@ enum class EComfyUINodeInputType : uint8
     CLIP        UMETA(DisplayName = "CLIP"),
     Conditioning UMETA(DisplayName = "条件"),
     Latent      UMETA(DisplayName = "潜空间"),
+    Mesh        UMETA(DisplayName = "网格"),
     Unknown     UMETA(DisplayName = "未知")
 };
 
@@ -120,7 +121,7 @@ enum class EComfyUIWorkflowType : uint8
     ImageToImage        UMETA(DisplayName = "图生图"),
     TextTo3D           UMETA(DisplayName = "文生3D"),
     ImageTo3D          UMETA(DisplayName = "图生3D"),
-    TextureGeneration   UMETA(DisplayName = "纹理生成"),
+    MeshTexturing      UMETA(DisplayName = "纹理生成"),
     Custom             UMETA(DisplayName = "自定义工作流"),
     Unknown            UMETA(DisplayName = "未知")
 };

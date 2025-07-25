@@ -45,54 +45,6 @@
             "template": "img2img.json"
         },
         {
-            "name": "Text to 3D Model",
-            "type": "text_to_3d",
-            "description": "Generate 3D models from text descriptions",
-            "parameters": {
-                "guidance_scale": 7.5,
-                "num_inference_steps": 50,
-                "output_format": "glb",
-                "texture_resolution": 1024,
-                "generate_textures": true
-            },
-            "template": "text_to_3d.json"
-        },
-        {
-            "name": "Image to 3D Model",
-            "type": "image_to_3d",
-            "description": "Generate 3D models from input images",
-            "parameters": {
-                "strength": 0.8,
-                "guidance_scale": 7.5,
-                "num_inference_steps": 40,
-                "output_format": "glb",
-                "texture_size": 1024,
-                "mesh_resolution": "high",
-                "optimize_for_game": true,
-                "generate_lods": true
-            },
-            "template": "image_to_3d.json"
-        },
-        {
-            "name": "PBR Texture Generation",
-            "type": "texture_generation",
-            "description": "Generate complete PBR texture sets (diffuse, normal, roughness, metallic, AO)",
-            "parameters": {
-                "width": 1024,
-                "height": 1024,
-                "guidance_scale": 7.5,
-                "num_inference_steps": 30,
-                "generate_normal": true,
-                "generate_roughness": true,
-                "generate_metallic": true,
-                "generate_ao": true,
-                "seamless": true,
-                "format": "png",
-                "quality": 95
-            },
-            "template": "texture_generation.json"
-        },
-        {
             "name": "High-Resolution Upscale",
             "type": "upscale",
             "description": "Upscale images to higher resolution with AI enhancement",
@@ -113,6 +65,51 @@
                 "content_strength": 0.6
             },
             "template": "style_transfer.json"
+        },
+        {
+            "name": "Mesh Texturing",
+            "type": "mesh_texturing",
+            "description": "Generate textures for existing 3D meshes using HunyuanI3D",
+            "parameters": {
+                "resolution": 768,
+                "num_views": 10,
+                "elevation": 3,
+                "size": 1024,
+                "do_rescale": false,
+                "filename_prefix": "MV",
+                "output_mesh_name": "TexturedMesh"
+            },
+            "template": "mesh_texturing.json"
+        },
+        {
+            "name": "Image to 3D Full",
+            "type": "image_to_3d",
+            "description": "Generate complete 3D models with textures from single images using HunyuanI3D pipeline",
+            "parameters": {
+                "vae_model": "Hunyuan3D-vae-v2-1-fp16.ckpt",
+                "dit_model": "hunyuan3d-dit-v2-1-fp16.ckpt",
+                "steps": 25,
+                "cfg": 7.5,
+                "iso_value": 1.01,
+                "resolution": 256,
+                "max_faces": 200000,
+                "algo": "mc",
+                "post_process": true,
+                "fix_normals": false,
+                "remove_duplicated": true,
+                "smooth": true,
+                "unwrap": true,
+                "simplify": false,
+                "mv_resolution": 768,
+                "num_views": 10,
+                "elevation": 3,
+                "size": 1024,
+                "do_rescale": false,
+                "format": "glb",
+                "save_texture": true,
+                "output_mesh_name": "Generated3D"
+            },
+            "template": "image_to_3d_full.json"
         }
     ],
     "server_settings": {

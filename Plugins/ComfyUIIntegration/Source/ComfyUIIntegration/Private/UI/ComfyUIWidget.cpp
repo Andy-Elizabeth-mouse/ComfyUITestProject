@@ -4,6 +4,7 @@
 #include "Workflow/ComfyUIWorkflowConfig.h"
 #include "Workflow/ComfyUIWorkflowService.h"
 #include "Workflow/ComfyUIWorkflowManager.h"
+#include "Workflow/ComfyUIWorkflowExecutor.h"
 #include "Utils/ComfyUIFileManager.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Layout/SSeparator.h"
@@ -57,7 +58,7 @@ void SComfyUIWidget::Construct(const FArguments& InArgs)
     WorkflowOptions.Add(MakeShareable(new EComfyUIWorkflowType(EComfyUIWorkflowType::ImageToImage)));
     WorkflowOptions.Add(MakeShareable(new EComfyUIWorkflowType(EComfyUIWorkflowType::TextTo3D)));
     WorkflowOptions.Add(MakeShareable(new EComfyUIWorkflowType(EComfyUIWorkflowType::ImageTo3D)));
-    WorkflowOptions.Add(MakeShareable(new EComfyUIWorkflowType(EComfyUIWorkflowType::TextureGeneration)));
+    WorkflowOptions.Add(MakeShareable(new EComfyUIWorkflowType(EComfyUIWorkflowType::MeshTexturing)));
     WorkflowOptions.Add(MakeShareable(new EComfyUIWorkflowType(EComfyUIWorkflowType::Custom)));
     
     // 设置默认选择
@@ -110,6 +111,14 @@ void SComfyUIWidget::Construct(const FArguments& InArgs)
         .Padding(5.0f)
         [
             CreateInputImageWidget()
+        ]
+
+        // 模型输入区域（仅在纹理生成时显示）
+        + SVerticalBox::Slot()
+        .AutoHeight()
+        .Padding(5.0f)
+        [
+            CreateModelInputWidget()
         ]
 
         // 提示词输入区域
@@ -325,6 +334,7 @@ TSharedRef<SWidget> SComfyUIWidget::CreatePromptInputWidget()
             SNew(STextBlock)
             .Text(LOCTEXT("PromptInputLabel", "提示词输入"))
             .Font(FCoreStyle::GetDefaultFontStyle("Bold", 12))
+            .Visibility(this, &SComfyUIWidget::GetPromptInputVisibility)
         ]
 
         + SVerticalBox::Slot()
@@ -333,6 +343,7 @@ TSharedRef<SWidget> SComfyUIWidget::CreatePromptInputWidget()
         [
             SNew(STextBlock)
             .Text(LOCTEXT("PositivePromptLabel", "正面提示词："))
+            .Visibility(this, &SComfyUIWidget::GetPromptInputVisibility)
         ]
 
         + SVerticalBox::Slot()
@@ -342,6 +353,7 @@ TSharedRef<SWidget> SComfyUIWidget::CreatePromptInputWidget()
             SNew(SBorder)
             .BorderImage(FAppStyle::GetBrush("ToolPanel.GroupBorder"))
             .Padding(2.0f)
+            .Visibility(this, &SComfyUIWidget::GetPromptInputVisibility)
             [
                 SNew(SBox)
                 .MinDesiredHeight(80.0f)
@@ -358,6 +370,7 @@ TSharedRef<SWidget> SComfyUIWidget::CreatePromptInputWidget()
         [
             SNew(STextBlock)
             .Text(LOCTEXT("NegativePromptLabel", "负面提示词："))
+            .Visibility(this, &SComfyUIWidget::GetPromptInputVisibility)
         ]
 
         + SVerticalBox::Slot()
@@ -367,6 +380,7 @@ TSharedRef<SWidget> SComfyUIWidget::CreatePromptInputWidget()
             SNew(SBorder)
             .BorderImage(FAppStyle::GetBrush("ToolPanel.GroupBorder"))
             .Padding(2.0f)
+            .Visibility(this, &SComfyUIWidget::GetPromptInputVisibility)
             [
                 SNew(SBox)
                 .MinDesiredHeight(60.0f)
@@ -521,6 +535,63 @@ TSharedRef<SWidget> SComfyUIWidget::CreateInputImageWidget()
         ];
 }
 
+TSharedRef<SWidget> SComfyUIWidget::CreateModelInputWidget()
+{
+    return SNew(SVerticalBox)
+        .Visibility(this, &SComfyUIWidget::GetModelInputVisibility)
+        
+        + SVerticalBox::Slot()
+        .AutoHeight()
+        .Padding(0.0f, 2.0f)
+        [
+            SNew(STextBlock)
+            .Text(LOCTEXT("ModelInputLabel", "模型输入"))
+            .Font(FCoreStyle::GetDefaultFontStyle("Bold", 12))
+        ]
+
+        + SVerticalBox::Slot()
+        .AutoHeight()
+        .Padding(0.0f, 2.0f)
+        [
+            SNew(SHorizontalBox)
+            
+            + SHorizontalBox::Slot()
+            .FillWidth(1.0f)
+            .Padding(0.0f, 0.0f, 5.0f, 0.0f)
+            [
+                SAssignNew(ModelPathTextBox, SEditableTextBox)
+                .HintText(LOCTEXT("ModelPathHint", "3D模型文件路径 (支持拖拽)"))
+                .Text_Lambda([this]() { return FText::FromString(InputModelPath); })
+                .OnTextChanged_Lambda([this](const FText& NewText) {
+                    InputModelPath = NewText.ToString();
+                })
+            ]
+            
+            + SHorizontalBox::Slot()
+            .AutoWidth()
+            .Padding(2.0f, 0.0f)
+            [
+                SAssignNew(LoadModelButton, SButton)
+                .Text(LOCTEXT("LoadModelButton", "浏览"))
+                .OnClicked(this, &SComfyUIWidget::OnLoadModelClicked)
+                .HAlign(HAlign_Center)
+                .ToolTipText(LOCTEXT("LoadModelTooltip", "选择3D模型文件(.obj/.fbx/.glb/.ply)"))
+            ]
+            
+            + SHorizontalBox::Slot()
+            .AutoWidth()
+            .Padding(2.0f, 0.0f)
+            [
+                SAssignNew(ClearModelButton, SButton)
+                .Text(LOCTEXT("ClearModelButton", "清除"))
+                .OnClicked(this, &SComfyUIWidget::OnClearModelClicked)
+                .HAlign(HAlign_Center)
+                .IsEnabled(false) // 初始状态禁用
+                .ToolTipText(LOCTEXT("ClearModelTooltip", "清除当前3D模型路径"))
+            ]
+        ];
+}
+
 TSharedRef<SWidget> SComfyUIWidget::CreateImagePreviewWidget()
 {
     return SNew(SVerticalBox)
@@ -579,25 +650,6 @@ FText SComfyUIWidget::GetGenerateButtonText() const
 {
     if (bIsGenerating)
         return LOCTEXT("GeneratingButton", "生成中...");
-    
-    if (CurrentWorkflowType.IsValid())
-    {
-        switch (*CurrentWorkflowType)
-        {
-        case EComfyUIWorkflowType::TextToImage:
-        case EComfyUIWorkflowType::ImageToImage:
-            return LOCTEXT("GenerateButton", "生成图像");
-        case EComfyUIWorkflowType::TextTo3D:
-        case EComfyUIWorkflowType::ImageTo3D:
-            return LOCTEXT("Generate3DButton", "生成3D模型");
-        case EComfyUIWorkflowType::TextureGeneration:
-            return LOCTEXT("GenerateTextureButton", "生成纹理");
-        case EComfyUIWorkflowType::Custom:
-            return LOCTEXT("GenerateCustomButton", "生成内容");
-        default:
-            break;
-        }
-    }
     return LOCTEXT("GenerateButton", "生成图像");
 }
 
@@ -613,25 +665,69 @@ FText SComfyUIWidget::WorkflowTypeToText(EComfyUIWorkflowType Type) const
         return LOCTEXT("TextTo3D", "文生3D模型");
     case EComfyUIWorkflowType::ImageTo3D:
         return LOCTEXT("ImageTo3D", "图生3D模型");
-    case EComfyUIWorkflowType::TextureGeneration:
-        return LOCTEXT("TextureGeneration", "纹理生成");
+    case EComfyUIWorkflowType::MeshTexturing:
+        return LOCTEXT("MeshTexturing", "纹理生成");
     case EComfyUIWorkflowType::Custom:
         return LOCTEXT("CustomWorkflow", "自定义工作流");
     default:
         return LOCTEXT("Unknown", "未知");
     }
 }
-
+#pragma optimize("", off)
 FReply SComfyUIWidget::OnGenerateClicked()
 {
     FString ServerUrl = ComfyUIServerUrlTextBox->GetText().ToString();
     FString Prompt = PromptTextBox->GetText().ToString();
     FString NegativePrompt = NegativePromptTextBox->GetText().ToString();
 
-    if (ServerUrl.IsEmpty() || Prompt.IsEmpty())
+    // 检查服务器URL是必须的
+    if (ServerUrl.IsEmpty())
     {
-        // 显示错误通知
-        FNotificationInfo Info(LOCTEXT("InvalidInput", "请输入服务器URL和提示词"));
+        FNotificationInfo Info(LOCTEXT("InvalidServerUrl", "请输入服务器URL"));
+        Info.ExpireDuration = 3.0f;
+        FSlateNotificationManager::Get().AddNotification(Info);
+        return FReply::Handled();
+    }
+    
+    // 检查当前工作流类型是否需要prompt输入
+    EComfyUIWorkflowType TypeToCheck = EComfyUIWorkflowType::TextToImage;
+    if (CurrentWorkflowType.IsValid() && *CurrentWorkflowType == EComfyUIWorkflowType::Custom)
+        TypeToCheck = DetectedCustomWorkflowType;
+    else if (CurrentWorkflowType.IsValid())
+        TypeToCheck = *CurrentWorkflowType;
+    
+    // 只有需要prompt的工作流才检查prompt是否为空
+    bool bNeedsPrompt = (TypeToCheck == EComfyUIWorkflowType::TextToImage ||
+                        TypeToCheck == EComfyUIWorkflowType::ImageToImage ||
+                        TypeToCheck == EComfyUIWorkflowType::TextTo3D);
+    
+    if (bNeedsPrompt && Prompt.IsEmpty())
+    {
+        FNotificationInfo Info(LOCTEXT("InvalidPrompt", "请输入提示词"));
+        Info.ExpireDuration = 3.0f;
+        FSlateNotificationManager::Get().AddNotification(Info);
+        return FReply::Handled();
+    }
+    
+    // 检查是否需要图像输入
+    bool bNeedsImage = (TypeToCheck == EComfyUIWorkflowType::ImageToImage ||
+                       TypeToCheck == EComfyUIWorkflowType::ImageTo3D ||
+                       TypeToCheck == EComfyUIWorkflowType::MeshTexturing);
+    
+    if (bNeedsImage && !InputImage)
+    {
+        FNotificationInfo Info(LOCTEXT("InvalidImage", "请先加载输入图像"));
+        Info.ExpireDuration = 3.0f;
+        FSlateNotificationManager::Get().AddNotification(Info);
+        return FReply::Handled();
+    }
+    
+    // 检查是否需要3D模型输入
+    bool bNeedsModel = (TypeToCheck == EComfyUIWorkflowType::MeshTexturing);
+    
+    if (bNeedsModel && InputModelPath.IsEmpty())
+    {
+        FNotificationInfo Info(LOCTEXT("InvalidModel", "请先选择3D模型文件"));
         Info.ExpireDuration = 3.0f;
         FSlateNotificationManager::Get().AddNotification(Info);
         return FReply::Handled();
@@ -654,7 +750,7 @@ FReply SComfyUIWidget::OnGenerateClicked()
     bIsGenerating = true;
 
     // 创建ComfyUI客户端进行连接测试
-    UComfyUIClient* Client = NewObject<UComfyUIClient>();
+    UComfyUIClient* Client = NewObject<UComfyUIClient>(GetTransientPackage(), UComfyUIClient::StaticClass());
     if (Client)
     {
         Client->SetServerUrl(ServerUrl);
@@ -666,84 +762,25 @@ FReply SComfyUIWidget::OnGenerateClicked()
             Client->SetWorldContext(GWorld);
         
         // 先测试连接
-        Client->TestServerConnection(FOnConnectionTested::CreateLambda([this, Client, Prompt, NegativePrompt](bool bSuccess, FString ErrorMessage)
+        Client->TestServerConnection(FOnConnectionTested::CreateLambda([this, TypeToCheck, Client, Prompt, NegativePrompt](bool bSuccess, FString ErrorMessage)
         {
             if (bSuccess)
             {
-                // 连接成功，根据工作流类型开始不同的生成过程
-                if (CurrentWorkflowType.IsValid() && *CurrentWorkflowType == EComfyUIWorkflowType::Custom)
-                {
-                    Client->GenerateImageWithCustomWorkflow(Prompt, NegativePrompt, *CurrentCustomWorkflow,
-                        FOnImageGenerated::CreateSP(this, &SComfyUIWidget::OnImageGenerationComplete),
-                        FOnGenerationProgress::CreateSP(this, &SComfyUIWidget::OnGenerationProgressUpdate),
-                        FOnGenerationStarted::CreateSP(this, &SComfyUIWidget::OnGenerationStarted),
-                        FOnGenerationCompleted::CreateSP(this, &SComfyUIWidget::OnGenerationCompleted));
-                }
-                else if (CurrentWorkflowType.IsValid())
-                {
-                    EComfyUIWorkflowType ClientWorkflowType = static_cast<EComfyUIWorkflowType>(*CurrentWorkflowType.Get());
-                    
-                    switch (ClientWorkflowType)
-                    {
-                    case EComfyUIWorkflowType::TextTo3D:
-                        // 文生3D
-                        Client->Generate3DModel(Prompt, NegativePrompt,
-                            FOn3DModelGenerated::CreateSP(this, &SComfyUIWidget::On3DModelGenerationComplete),
-                            FOnGenerationProgress::CreateSP(this, &SComfyUIWidget::OnGenerationProgressUpdate),
-                            FOnGenerationStarted::CreateSP(this, &SComfyUIWidget::OnGenerationStarted),
-                            FOnGenerationCompleted::CreateSP(this, &SComfyUIWidget::OnGenerationCompleted));
-                        break;
-                        
-                    case EComfyUIWorkflowType::ImageTo3D:
-                        // 图生3D - 需要先获取输入图像路径
-                        {
-                            FString InputImagePath = GetSelectedInputImagePath();
-                            if (InputImagePath.IsEmpty())
-                            {
-                                // 提示用户选择输入图像
-                                FNotificationInfo Info(LOCTEXT("NoInputImage", "图生3D需要选择输入图像"));
-                                Info.ExpireDuration = 3.0f;
-                                FSlateNotificationManager::Get().AddNotification(Info);
-                                GenerateButton->SetEnabled(true);
-                                bIsGenerating = false;
-                                return;
-                            }
-                            Client->Generate3DModelFromImage(Prompt, NegativePrompt, InputImagePath,
-                                FOn3DModelGenerated::CreateSP(this, &SComfyUIWidget::On3DModelGenerationComplete),
-                                FOnGenerationProgress::CreateSP(this, &SComfyUIWidget::OnGenerationProgressUpdate),
-                                FOnGenerationStarted::CreateSP(this, &SComfyUIWidget::OnGenerationStarted),
-                                FOnGenerationCompleted::CreateSP(this, &SComfyUIWidget::OnGenerationCompleted));
-                        }
-                        break;
-                        
-                    case EComfyUIWorkflowType::TextureGeneration:
-                        // PBR纹理生成
-                        Client->GeneratePBRTextures(Prompt, NegativePrompt,
-                            FOnTextureGenerated::CreateSP(this, &SComfyUIWidget::OnTextureGenerationComplete),
-                            FOnGenerationProgress::CreateSP(this, &SComfyUIWidget::OnGenerationProgressUpdate),
-                            FOnGenerationStarted::CreateSP(this, &SComfyUIWidget::OnGenerationStarted),
-                            FOnGenerationCompleted::CreateSP(this, &SComfyUIWidget::OnGenerationCompleted));
-                        break;
-                        
-                    default:
-                        // 默认图像生成（TextToImage, ImageToImage等）
-                        Client->GenerateImage(Prompt, NegativePrompt, ClientWorkflowType, 
-                            FOnImageGenerated::CreateSP(this, &SComfyUIWidget::OnImageGenerationComplete),
-                            FOnGenerationProgress::CreateSP(this, &SComfyUIWidget::OnGenerationProgressUpdate),
-                            FOnGenerationStarted::CreateSP(this, &SComfyUIWidget::OnGenerationStarted),
-                            FOnGenerationCompleted::CreateSP(this, &SComfyUIWidget::OnGenerationCompleted));
-                        break;
-                    }
-                }
-                else
-                {
-                    // 没有选择工作流类型，默认文生图
-                    Client->GenerateImage(Prompt, NegativePrompt, EComfyUIWorkflowType::TextToImage, 
-                        FOnImageGenerated::CreateSP(this, &SComfyUIWidget::OnImageGenerationComplete),
-                        FOnGenerationProgress::CreateSP(this, &SComfyUIWidget::OnGenerationProgressUpdate),
-                        FOnGenerationStarted::CreateSP(this, &SComfyUIWidget::OnGenerationStarted),
-                        FOnGenerationCompleted::CreateSP(this, &SComfyUIWidget::OnGenerationCompleted));
-                }
+                FComfyUIWorkflowExecutor::RunGeneration(
+                    TypeToCheck,
+                    Prompt,
+                    NegativePrompt,
+                    InputImage,
+                    InputModelPath,
+                    Client,
+                    // 回调委托，按正确顺序
+                    FOnImageGenerated::CreateSP(this, &SComfyUIWidget::OnImageGenerationComplete),
+                    FOnMeshGenerated(),  // 暂时为空，稍后添加3D模型支持
+                    FOnGenerationProgress::CreateSP(this, &SComfyUIWidget::OnGenerationProgressUpdate),
+                    FOnGenerationStarted::CreateSP(this, &SComfyUIWidget::OnGenerationStarted),
+                    FOnGenerationFailed(),  // 暂时为空，稍后添加失败处理
+                    FOnGenerationCompleted::CreateSP(this, &SComfyUIWidget::OnGenerationCompleted)
+                );
             }
             else
             {
@@ -764,7 +801,7 @@ FReply SComfyUIWidget::OnGenerateClicked()
 
     return FReply::Handled();
 }
-
+#pragma optimize("", on)
 FReply SComfyUIWidget::OnSaveClicked()
 {
     if (!GeneratedTexture)
@@ -826,7 +863,6 @@ FReply SComfyUIWidget::OnSaveAsClicked()
 FReply SComfyUIWidget::OnPreviewClicked()
 {
     // TODO: 实现预览功能
-    UComfyUIWorkflowService::Get()->WorkflowManager->RunWorkflowTests();
     FNotificationInfo Info(LOCTEXT("PreviewNotImplemented", "预览功能暂未实现"));
     Info.ExpireDuration = 3.0f;
     FSlateNotificationManager::Get().AddNotification(Info);
@@ -932,6 +968,61 @@ FReply SComfyUIWidget::OnClearImageClicked()
     
     // 显示通知
     FNotificationInfo Info(LOCTEXT("ImageCleared", "已清除输入图像"));
+    Info.ExpireDuration = 2.0f;
+    FSlateNotificationManager::Get().AddNotification(Info);
+    
+    return FReply::Handled();
+}
+
+FReply SComfyUIWidget::OnLoadModelClicked()
+{
+    TArray<FString> FileNames;
+    const FString FileTypes = TEXT("3D Model Files (*.obj;*.fbx;*.glb;*.gltf;*.ply;*.stl)|*.obj;*.fbx;*.glb;*.gltf;*.ply;*.stl");
+    
+    if (UComfyUIFileManager::ShowOpenFileDialog(
+        TEXT("选择3D模型文件"),
+        FileTypes,
+        TEXT(""),
+        FileNames))
+    {
+        if (FileNames.Num() > 0)
+        {
+            InputModelPath = FileNames[0];
+            
+            if (ModelPathTextBox.IsValid())
+                ModelPathTextBox->SetText(FText::FromString(InputModelPath));
+            
+            // 启用清除按钮
+            if (ClearModelButton.IsValid())
+                ClearModelButton->SetEnabled(true);
+            
+            // 显示成功通知
+            FNotificationInfo Info(FText::Format(
+                LOCTEXT("ModelLoaded", "成功选择3D模型：{0}"),
+                FText::FromString(FPaths::GetBaseFilename(InputModelPath))
+            ));
+            Info.ExpireDuration = 3.0f;
+            FSlateNotificationManager::Get().AddNotification(Info);
+        }
+    }
+    
+    return FReply::Handled();
+}
+
+FReply SComfyUIWidget::OnClearModelClicked()
+{
+    // 清除3D模型路径
+    InputModelPath.Empty();
+    
+    if (ModelPathTextBox.IsValid())
+        ModelPathTextBox->SetText(FText::GetEmpty());
+    
+    // 禁用清除按钮
+    if (ClearModelButton.IsValid())
+        ClearModelButton->SetEnabled(false);
+    
+    // 显示通知
+    FNotificationInfo Info(LOCTEXT("ModelCleared", "已清除3D模型路径"));
     Info.ExpireDuration = 2.0f;
     FSlateNotificationManager::Get().AddNotification(Info);
     
@@ -1209,9 +1300,51 @@ EVisibility SComfyUIWidget::GetInputImageVisibility() const
     
     // 这些工作流类型需要输入图像
     if (TypeToCheck == EComfyUIWorkflowType::ImageToImage ||
-        TypeToCheck == EComfyUIWorkflowType::ImageTo3D)
+        TypeToCheck == EComfyUIWorkflowType::ImageTo3D ||
+        TypeToCheck == EComfyUIWorkflowType::MeshTexturing)
         return EVisibility::Visible;
     
+    return EVisibility::Collapsed;
+}
+
+EVisibility SComfyUIWidget::GetModelInputVisibility() const
+{
+    // 检查当前工作流类型是否需要模型输入
+    EComfyUIWorkflowType TypeToCheck = EComfyUIWorkflowType::TextToImage;
+    
+    if (CurrentWorkflowType.IsValid() && *CurrentWorkflowType == EComfyUIWorkflowType::Custom)
+        // 自定义工作流：使用检测到的类型
+        TypeToCheck = DetectedCustomWorkflowType;
+    else if (CurrentWorkflowType.IsValid())
+        // 预定义工作流：使用选择的类型
+        TypeToCheck = *CurrentWorkflowType;
+    
+    // 网格纹理化工作流需要3D模型输入
+    if (TypeToCheck == EComfyUIWorkflowType::MeshTexturing)
+        return EVisibility::Visible;
+    
+    return EVisibility::Collapsed;
+}
+
+EVisibility SComfyUIWidget::GetPromptInputVisibility() const
+{
+    // 检查当前工作流类型是否需要提示词输入
+    EComfyUIWorkflowType TypeToCheck = EComfyUIWorkflowType::TextToImage;
+    
+    if (CurrentWorkflowType.IsValid() && *CurrentWorkflowType == EComfyUIWorkflowType::Custom)
+        // 自定义工作流：使用检测到的类型
+        TypeToCheck = DetectedCustomWorkflowType;
+    else if (CurrentWorkflowType.IsValid())
+        // 预定义工作流：使用选择的类型
+        TypeToCheck = *CurrentWorkflowType;
+    
+    // 这些工作流类型需要提示词输入
+    if (TypeToCheck == EComfyUIWorkflowType::TextToImage ||
+        TypeToCheck == EComfyUIWorkflowType::ImageToImage ||
+        TypeToCheck == EComfyUIWorkflowType::TextTo3D)
+        return EVisibility::Visible;
+    
+    // 图生3D和网格纹理化不需要提示词输入
     return EVisibility::Collapsed;
 }
 
@@ -1328,11 +1461,36 @@ void SComfyUIWidget::DetectWorkflowType(const FString& WorkflowName)
     if (WorkflowName.IsEmpty()) return;
     
     // 使用工作流管理器检测工作流类型
-    UComfyUIWorkflowManager* WorkflowManager = NewObject<UComfyUIWorkflowManager>();
-    DetectedCustomWorkflowType = WorkflowManager->DetectWorkflowType(WorkflowName);
+    DetectedCustomWorkflowType = UComfyUIWorkflowService::Get()->DetectWorkflowType(WorkflowName);
         
     UE_LOG(LogTemp, Log, TEXT("DetectWorkflowType: Detected workflow type for '%s': %d"), 
            *WorkflowName, (int32)DetectedCustomWorkflowType);
+}
+
+bool SComfyUIWidget::DoesCurrentWorkflowNeedImage() const
+{
+    if (CurrentWorkflowType.IsValid() && *CurrentWorkflowType == EComfyUIWorkflowType::Custom)
+    {
+        // 对于自定义工作流，检查工作流名称是否包含图像到3D的关键词
+        if (CurrentCustomWorkflow.IsValid())
+        {
+            FString WorkflowName = CurrentCustomWorkflow->ToLower();
+            return WorkflowName.Contains(TEXT("image_to_3d")) || 
+                   WorkflowName.Contains(TEXT("img2mesh")) ||
+                   WorkflowName.Contains(TEXT("mesh_texture")) ||
+                   WorkflowName.Contains(TEXT("texture_mesh"));
+        }
+    }
+    else if (CurrentWorkflowType.IsValid())
+    {
+        // 对于预定义工作流类型，检查是否是图像到图像的类型
+        EComfyUIWorkflowType Type = *CurrentWorkflowType;
+        return Type == EComfyUIWorkflowType::ImageToImage ||
+               Type == EComfyUIWorkflowType::ImageTo3D ||
+               Type == EComfyUIWorkflowType::MeshTexturing;
+    }
+    
+    return false;
 }
 
 TSharedRef<SWidget> SComfyUIWidget::CreateProgressWidget()
@@ -1481,111 +1639,6 @@ void SComfyUIWidget::OnGenerationCompleted()
     bIsGenerating = false;
     CurrentProgressInfo = FComfyUIProgressInfo();
     UE_LOG(LogTemp, Log, TEXT("Generation completed"));
-}
-
-// ========== 新的生成完成回调实现 ==========
-
-void SComfyUIWidget::On3DModelGenerationComplete(const TArray<uint8>& ModelData)
-{
-    UE_LOG(LogTemp, Log, TEXT("3D model generation completed: %d bytes"), ModelData.Num());
-    
-    // 恢复UI状态
-    GenerateButton->SetEnabled(true);
-    bIsGenerating = false;
-    
-    if (ModelData.Num() > 0)
-    {
-        // 保存3D模型到临时位置
-        FString BaseName = FString::Printf(TEXT("ComfyUI_3DModel_%s"), *FDateTime::Now().ToString(TEXT("%Y%m%d_%H%M%S")));
-        
-        if (UComfyUIFileManager::Save3DModelToProject(ModelData, BaseName))
-        {
-            // 显示成功通知
-            FNotificationInfo Info(FText::Format(
-                LOCTEXT("3DModelGenerationSuccess", "3D模型生成成功！\n已保存为: {0}\n大小: {1} KB"),
-                FText::FromString(BaseName),
-                FText::AsNumber(ModelData.Num() / 1024)
-            ));
-            Info.ExpireDuration = 5.0f;
-            Info.bUseSuccessFailIcons = true;
-            Info.Image = FAppStyle::GetBrush(TEXT("NotificationList.SuccessImage"));
-            FSlateNotificationManager::Get().AddNotification(Info);
-        }
-        else
-        {
-            ShowSaveErrorNotification(TEXT("无法保存3D模型文件"));
-        }
-    }
-    else
-    {
-        ShowSaveErrorNotification(TEXT("3D模型数据为空"));
-    }
-}
-
-void SComfyUIWidget::OnTextureGenerationComplete(UTexture2D* NewGeneratedTexture)
-{
-    UE_LOG(LogTemp, Log, TEXT("Texture generation completed"));
-    
-    // 恢复UI状态
-    GenerateButton->SetEnabled(true);
-    bIsGenerating = false;
-    
-    if (NewGeneratedTexture)
-    {
-        // 显示生成的纹理
-        GeneratedTexture = NewGeneratedTexture;
-        CurrentImageBrush = MakeShareable(new FSlateBrush());
-        CurrentImageBrush->SetResourceObject(NewGeneratedTexture);
-        CurrentImageBrush->ImageSize = FVector2D(NewGeneratedTexture->GetSizeX(), NewGeneratedTexture->GetSizeY());
-        CurrentImageBrush->DrawAs = ESlateBrushDrawType::Image;
-        
-        if (ImagePreview.IsValid())
-        {
-            ImagePreview->SetImage(CurrentImageBrush.Get());
-        }
-        
-        // 启用保存按钮
-        if (SaveButton.IsValid())
-            SaveButton->SetEnabled(true);
-        if (SaveAsButton.IsValid())
-            SaveAsButton->SetEnabled(true);
-        
-        // 保存纹理到项目
-        FString BaseName = FString::Printf(TEXT("ComfyUI_Texture_%s"), *FDateTime::Now().ToString(TEXT("%Y%m%d_%H%M%S")));
-        
-        if (UComfyUIFileManager::SaveGeneratedTexture(NewGeneratedTexture, BaseName))
-        {
-            // 显示成功通知
-            FNotificationInfo Info(FText::Format(
-                LOCTEXT("TextureGenerationSuccess", "纹理生成成功！\n已保存为: {0}\n尺寸: {1}x{2}"),
-                FText::FromString(BaseName),
-                FText::AsNumber(NewGeneratedTexture->GetSizeX()),
-                FText::AsNumber(NewGeneratedTexture->GetSizeY())
-            ));
-            Info.ExpireDuration = 5.0f;
-            Info.bUseSuccessFailIcons = true;
-            Info.Image = FAppStyle::GetBrush(TEXT("NotificationList.SuccessImage"));
-            FSlateNotificationManager::Get().AddNotification(Info);
-        }
-        else
-        {
-            ShowSaveErrorNotification(TEXT("无法保存纹理文件"));
-        }
-    }
-    else
-    {
-        ShowSaveErrorNotification(TEXT("纹理生成失败"));
-    }
-}
-
-FString SComfyUIWidget::GetSelectedInputImagePath() const
-{
-    // TODO: 实现输入图像路径获取逻辑
-    // 这里可以从输入图像UI组件获取用户选择的图像文件路径
-    // 目前返回空字符串，需要结合具体的图像输入UI实现
-    
-    UE_LOG(LogTemp, Warning, TEXT("GetSelectedInputImagePath: Not yet implemented"));
-    return FString();
 }
 
 #undef LOCTEXT_NAMESPACE

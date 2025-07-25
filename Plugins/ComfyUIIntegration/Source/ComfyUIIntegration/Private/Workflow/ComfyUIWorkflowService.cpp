@@ -1,4 +1,5 @@
 #include "Workflow/ComfyUIWorkflowService.h"
+#include "Network/ComfyUINetworkManager.h"
 #include "Workflow/ComfyUIWorkflowManager.h"
 #include "Utils/Defines.h"
 
@@ -153,6 +154,77 @@ FString UComfyUIWorkflowService::BuildWorkflowJson(const FString& WorkflowName,
     return BuildWorkflowJson(WorkflowName, Prompt, NegativePrompt, EmptyParameters);
 }
 
+FString UComfyUIWorkflowService::BuildWorkflowJson(const FString& WorkflowName, 
+                                                   const FString& Prompt, 
+                                                   const FString& NegativePrompt,
+                                                   const TMap<FString, float>& Parameters)
+{
+    // 将float参数转换为字符串参数
+    TMap<FString, FString> StringParameters;
+    for (const auto& Param : Parameters)
+    {
+        StringParameters.Add(Param.Key, FString::SanitizeFloat(Param.Value));
+    }
+    return BuildWorkflowJson(WorkflowName, Prompt, NegativePrompt, StringParameters);
+}
+
+void UComfyUIWorkflowService::BuildWorkflowJsonWithImage(const FString& WorkflowName,
+                                                        const FString& Prompt,
+                                                        const FString& NegativePrompt,
+                                                        const TArray<uint8>& ImageData,
+                                                        const FString& ServerUrl,
+                                                        TFunction<void(const FString& WorkflowJson, bool bSuccess)> Callback)
+{
+    if (!WorkflowManager)
+    {
+        UE_LOG(LogTemp, Error, TEXT("BuildWorkflowJsonWithImage: WorkflowManager is null"));
+        Callback(TEXT(""), false);
+        return;
+    }
+    
+    // 获取网络管理器单例
+    UComfyUINetworkManager* NetworkManager = NewObject<UComfyUINetworkManager>();
+    if (!NetworkManager)
+    {
+        UE_LOG(LogTemp, Error, TEXT("BuildWorkflowJsonWithImage: Failed to create NetworkManager"));
+        Callback(TEXT(""), false);
+        return;
+    }
+    
+    // 生成唯一的文件名
+    FString FileName = FString::Printf(TEXT("input_image_%d.png"), FMath::Rand());
+    
+    // 上传图像
+    NetworkManager->UploadImage(ServerUrl, ImageData, FileName,
+        [this, WorkflowName, Prompt, NegativePrompt, Callback](const FString& UploadedImageName, bool bUploadSuccess)
+        {
+            if (!bUploadSuccess || UploadedImageName.IsEmpty())
+            {
+                UE_LOG(LogTemp, Error, TEXT("BuildWorkflowJsonWithImage: Failed to upload image"));
+                Callback(TEXT(""), false);
+                return;
+            }
+            
+            // 创建参数映射，将INPUT_IMAGE替换为上传的图像名称
+            TMap<FString, FString> Parameters;
+            Parameters.Add(TEXT("INPUT_IMAGE"), UploadedImageName);
+            
+            // 构建工作流JSON
+            FString WorkflowJson = BuildWorkflowJson(WorkflowName, Prompt, NegativePrompt, Parameters);
+            
+            if (WorkflowJson.IsEmpty() || WorkflowJson == TEXT("{}"))
+            {
+                UE_LOG(LogTemp, Error, TEXT("BuildWorkflowJsonWithImage: Failed to build workflow JSON"));
+                Callback(TEXT(""), false);
+            }
+            else
+            {
+                UE_LOG(LogTemp, Log, TEXT("BuildWorkflowJsonWithImage: Successfully built workflow with image: %s"), *UploadedImageName);
+                Callback(WorkflowJson, true);
+            }
+        });
+}
+
 // ========== 参数管理接口 ==========
 
 TArray<FString> UComfyUIWorkflowService::GetWorkflowParameters(const FString& WorkflowName) const
@@ -221,4 +293,9 @@ FString UComfyUIWorkflowService::GetWorkflowType(const FString& WorkflowName) co
     }
     
     return FString();
+}
+
+EComfyUIWorkflowType UComfyUIWorkflowService::DetectWorkflowType(const FString &WorkflowName)
+{
+    return WorkflowManager->DetectWorkflowType(WorkflowName);
 }

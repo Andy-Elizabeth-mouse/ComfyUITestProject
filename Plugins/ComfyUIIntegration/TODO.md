@@ -25,10 +25,13 @@
 
 ##  workflow 扩展
 
-- [ ] **实现3D和纹理生成工作流**
+- [x] **实现3D和纹理生成工作流**
   - 在 `EComfyUIWorkflowType` 中已经定义了 `TextTo3D`, `ImageTo3D`, `TextureGeneration`。
-  - 需要在 `InitializeWorkflowConfigs` 或通过JSON配置文件为这些类型添加相应的工作流模板。
-  - 实现处理3D模型数据（如glTF, obj）和纹理数据的逻辑。
+  - 已在 `Config/default_config.json` 和 `Templates/` 目录中添加了相应的工作流模板。
+  - 已实现 `UComfyUI3DAssetManager` 用于处理3D模型数据（如OBJ, glTF）。
+  - 已实现 `UComfyUITextureAssetManager` 用于处理PBR纹理数据和材质创建。
+  - 支持OBJ格式的3D模型导入和静态网格创建。
+  - 支持多种PBR纹理类型（Diffuse, Normal, Roughness, Metallic, Height, AO）。
 
 - [ ] **完善图生图（Image-to-Image）工作流**
   - 当前的 `BuildWorkflowJson` 没有处理输入图像的逻辑。
