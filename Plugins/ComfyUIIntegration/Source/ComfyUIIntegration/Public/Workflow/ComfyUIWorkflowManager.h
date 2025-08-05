@@ -79,20 +79,12 @@ public:
     
     /** 构建自定义工作流JSON */
     UFUNCTION(BlueprintCallable, Category = "ComfyUI|Workflow")
-    FString BuildCustomWorkflowJson(const FString& Prompt, const FString& NegativePrompt, 
-                                   const FString& CustomWorkflowName);
+    FString BuildWorkflowJson(const FString& CustomWorkflowName);
     
     /** 替换工作流模板中的占位符 */
     UFUNCTION(BlueprintCallable, Category = "ComfyUI|Workflow")
     FString ReplaceWorkflowPlaceholders(const FString& WorkflowTemplate, 
-                                       const FString& Prompt, 
-                                       const FString& NegativePrompt,
                                        const TMap<FString, FString>& CustomParameters);
-    
-    /** 替换工作流模板中的占位符 - C++重载版本，支持默认参数 */
-    FString ReplaceWorkflowPlaceholders(const FString& WorkflowTemplate, 
-                                       const FString& Prompt, 
-                                       const FString& NegativePrompt);
 
     // ========== 工作流参数管理 ==========
     

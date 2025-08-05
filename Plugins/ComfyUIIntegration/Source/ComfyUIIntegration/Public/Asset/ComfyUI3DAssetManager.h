@@ -106,4 +106,7 @@ private:
     static UStaticMesh* CreateStaticMeshFromVertices(const TArray<FVector>& Vertices, const TArray<int32>& Indices, const TArray<FVector2D>& UVs);
     static bool ParseOBJData(const TArray<uint8>& OBJData, TArray<FVector>& OutVertices, TArray<int32>& OutIndices, TArray<FVector2D>& OutUVs);
     static FString GenerateUniqueAssetName(const FString& BaseName, const FString& PackagePath);
+    static UStaticMesh* CreateFallbackMeshFromGLTF(const TArray<uint8>& GLTFData);
+    static UStaticMesh* ParseGLBData(const TArray<uint8>& GLBData);
+    static UStaticMesh* ParseGLTFJson(const FString& JsonContent);
 };

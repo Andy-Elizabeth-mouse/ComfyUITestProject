@@ -32,32 +32,10 @@ struct COMFYUIINTEGRATION_API FComfyUIWorkflowExecutorParams
     FOnGenerationCompleted OnCompleted;
 };
 
-USTRUCT(BlueprintType)
-struct FComfyUIWorkflowExecutorResult
-{
-    GENERATED_BODY()
-
-    UPROPERTY(BlueprintReadWrite, Category = "ComfyUI")
-    bool bSuccess = false;
-
-    UPROPERTY(BlueprintReadWrite, Category = "ComfyUI")
-    FString ErrorMessage;
-
-    UPROPERTY(BlueprintReadWrite, Category = "ComfyUI")
-    UTexture2D* GeneratedImage = nullptr;
-
-    UPROPERTY(BlueprintReadWrite, Category = "ComfyUI")
-    UTexture2D* GeneratedTexture = nullptr;  // 保持向后兼容性
-
-    UPROPERTY(BlueprintReadWrite, Category = "ComfyUI")
-    UStaticMesh* GeneratedMesh = nullptr;
-    // 可扩展更多类型
-};
-
 class FComfyUIWorkflowExecutor
 {
 public:
-    static FComfyUIWorkflowExecutorResult RunGeneration(EComfyUIWorkflowType WorkflowType,
+    static void RunGeneration(EComfyUIWorkflowType WorkflowType,
                                                         const FString& Prompt,
                                                         const FString& NegativePrompt,
                                                         UTexture2D* InputImage,
@@ -70,7 +48,7 @@ public:
                                                         FOnGenerationStarted OnStarted = FOnGenerationStarted(),
                                                         FOnGenerationFailed OnFailed = FOnGenerationFailed(),
                                                         FOnGenerationCompleted OnCompleted = FOnGenerationCompleted());
-    static FComfyUIWorkflowExecutorResult ExecuteWorkflow(const FComfyUIWorkflowExecutorParams& Params, class UComfyUIClient* Client);
+    static void ExecuteWorkflow(const FComfyUIWorkflowExecutorParams& Params, class UComfyUIClient* Client);
 
 private:
     // 辅助函数：检查工作流是否需要图像输入

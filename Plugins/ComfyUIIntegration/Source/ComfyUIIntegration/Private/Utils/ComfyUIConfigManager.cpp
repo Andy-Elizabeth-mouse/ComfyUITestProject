@@ -113,7 +113,7 @@ bool UComfyUIConfigManager::GetServerSettings(FString& OutServerAddress, int32& 
     }
 
     // 使用默认值
-    OutServerAddress = TEXT("127.0.0.1");
+    OutServerAddress = TEXT("192.168.2.169");
     OutServerPort = 8188;
     return false;
 }
@@ -152,7 +152,7 @@ TSharedPtr<FJsonObject> UComfyUIConfigManager::CreateDefaultConfigJson()
 
     // 服务器设置
     TSharedPtr<FJsonObject> ServerSettings = MakeShareable(new FJsonObject);
-    ServerSettings->SetStringField(TEXT("address"), TEXT("127.0.0.1"));
+    ServerSettings->SetStringField(TEXT("address"), TEXT("192.168.2.169"));
     ServerSettings->SetNumberField(TEXT("port"), 8188);
     ConfigJson->SetObjectField(TEXT("server_settings"), ServerSettings);
 

@@ -9,7 +9,7 @@ UComfyUINetworkManager::UComfyUINetworkManager()
 {
     HttpModule = &FHttpModule::Get();
 }
-#pragma optimize("", off)
+
 void UComfyUINetworkManager::SendRequest(const FString& Url, const FString& Payload, TFunction<void(const FString& Response, bool bSuccess)> Callback)
 {
     // 构建HTTP请求
@@ -27,17 +27,12 @@ void UComfyUINetworkManager::SendRequest(const FString& Url, const FString& Payl
     Request->OnProcessRequestComplete().BindLambda(
         [this, Callback](FHttpRequestPtr Req, FHttpResponsePtr Resp, bool bSuccess)
         {
-            // 分析HTTP错误
             FComfyUIError Error = AnalyzeHttpError(Req, Resp, bSuccess);
             
             if (Error.ErrorType == EComfyUIErrorType::None)
-            {
-                // 请求成功
                 Callback(Resp->GetContentAsString(), true);
-            }
             else
             {
-                // 请求失败，记录错误
                 UE_LOG(LogTemp, Warning, TEXT("NetworkManager: HTTP Request failed - %s"), *Error.ErrorMessage);
                 Callback(TEXT(""), false);
             }
@@ -45,13 +40,10 @@ void UComfyUINetworkManager::SendRequest(const FString& Url, const FString& Payl
     );
     Request->ProcessRequest();
 }
-#pragma optimize("", on)
+
 void UComfyUINetworkManager::SendGetRequest(const FString& Url, TFunction<void(const FString& Response, bool bSuccess)> Callback, float TimeoutSeconds)
 {
-    if (!HttpModule)
-    {
-        HttpModule = &FHttpModule::Get();
-    }
+    if (!HttpModule) HttpModule = &FHttpModule::Get();
     
     TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = HttpModule->CreateRequest();
     Request->SetURL(Url);
@@ -82,31 +74,25 @@ void UComfyUINetworkManager::SendGetRequest(const FString& Url, TFunction<void(c
 
 void UComfyUINetworkManager::DownloadImage(const FString& Url, TFunction<void(const TArray<uint8>& ImageData, bool bSuccess)> Callback)
 {
-    if (!HttpModule)
-    {
-        HttpModule = &FHttpModule::Get();
-    }
+    if (!HttpModule) HttpModule = &FHttpModule::Get();
     
     TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = HttpModule->CreateRequest();
     Request->SetURL(Url);
     Request->SetVerb(TEXT("GET"));
-    Request->SetTimeout(30.0f); // 图片下载需要更长时间
+    Request->SetTimeout(30.0f);
 
     Request->OnProcessRequestComplete().BindLambda(
         [this, Callback](FHttpRequestPtr Req, FHttpResponsePtr Resp, bool bSuccess)
         {
-            // 分析HTTP错误
             FComfyUIError Error = AnalyzeHttpError(Req, Resp, bSuccess);
             
             if (Error.ErrorType == EComfyUIErrorType::None)
             {
-                // 请求成功，返回图片数据
                 TArray<uint8> ImageData = Resp->GetContent();
                 Callback(ImageData, true);
             }
             else
             {
-                // 请求失败，记录错误
                 UE_LOG(LogTemp, Warning, TEXT("NetworkManager Image Download failed: %s"), *Error.ErrorMessage);
                 TArray<uint8> EmptyData;
                 Callback(EmptyData, false);
@@ -118,17 +104,11 @@ void UComfyUINetworkManager::DownloadImage(const FString& Url, TFunction<void(co
 #pragma optimize("", off)
 void UComfyUINetworkManager::UploadImage(const FString& ServerUrl, const TArray<uint8>& ImageData, const FString& FileName, TFunction<void(const FString& UploadedImageName, bool bSuccess)> Callback)
 {
-    if (!HttpModule)
-    {
-        HttpModule = &FHttpModule::Get();
-    }
+    if (!HttpModule) HttpModule = &FHttpModule::Get();
     
     // 构建上传URL
     FString UploadUrl = ServerUrl;
-    if (!UploadUrl.EndsWith(TEXT("/")))
-    {
-        UploadUrl += TEXT("/");
-    }
+    if (!UploadUrl.EndsWith(TEXT("/"))) UploadUrl += TEXT("/"); 
     UploadUrl += TEXT("upload/image");
     
     TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = HttpModule->CreateRequest();
@@ -192,14 +172,137 @@ void UComfyUINetworkManager::UploadImage(const FString& ServerUrl, const TArray<
     );
     Request->ProcessRequest();
 }
+
+void UComfyUINetworkManager::UploadModel(const FString& ServerUrl, const TArray<uint8>& ModelData, const FString& FileName, TFunction<void(const FString& UploadedModelName, bool bSuccess)> Callback)
+{
+    if (!HttpModule) HttpModule = &FHttpModule::Get();
+    
+    // 构建上传URL
+    FString UploadUrl = ServerUrl;
+    if (!UploadUrl.EndsWith(TEXT("/"))) UploadUrl += TEXT("/");
+    UploadUrl += TEXT("upload/model");
+    
+    TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = HttpModule->CreateRequest();
+    Request->SetURL(UploadUrl);
+    Request->SetVerb(TEXT("POST"));
+    Request->SetTimeout(120.0f);
+    
+    // 创建multipart/form-data格式的内容
+    FString Boundary = FString::Printf(TEXT("----UnrealEngine4FormBoundary%d"), FMath::Rand());
+    FString ContentType = FString::Printf(TEXT("multipart/form-data; boundary=%s"), *Boundary);
+    Request->SetHeader(TEXT("Content-Type"), ContentType);
+    
+    // 构建multipart内容
+    TArray<uint8> FormData;
+    
+    // 根据文件扩展名确定Content-Type
+    FString ModelContentType = TEXT("application/octet-stream");
+    if (FileName.EndsWith(TEXT(".glb")))
+        ModelContentType = TEXT("model/gltf-binary");
+    else if (FileName.EndsWith(TEXT(".gltf")))
+        ModelContentType = TEXT("model/gltf+json");
+    else if (FileName.EndsWith(TEXT(".obj")))
+        ModelContentType = TEXT("text/plain");
+    else if (FileName.EndsWith(TEXT(".ply")))
+        ModelContentType = TEXT("application/octet-stream");
+    
+    // 添加文件字段
+    FString FileHeader = FString::Printf(TEXT("--%s\r\nContent-Disposition: form-data; name=\"model\"; filename=\"%s\"\r\nContent-Type: %s\r\n\r\n"), 
+                                        *Boundary, *FileName, *ModelContentType);
+    FormData.Append((uint8*)TCHAR_TO_UTF8(*FileHeader), FileHeader.Len());
+    FormData.Append(ModelData);
+    
+    // 添加结束边界
+    FString EndBoundary = FString::Printf(TEXT("\r\n--%s--\r\n"), *Boundary);
+    FormData.Append((uint8*)TCHAR_TO_UTF8(*EndBoundary), EndBoundary.Len());
+    
+    Request->SetContent(FormData);
+
+    Request->OnProcessRequestComplete().BindLambda(
+        [this, Callback](FHttpRequestPtr Req, FHttpResponsePtr Resp, bool bSuccess)
+        {
+            // 分析HTTP错误
+            FComfyUIError Error = AnalyzeHttpError(Req, Resp, bSuccess);
+            
+            if (Error.ErrorType == EComfyUIErrorType::None)
+            {
+                // 解析响应JSON获取上传的模型名称
+                FString ResponseContent = Resp->GetContentAsString();
+                TSharedPtr<FJsonObject> JsonObject;
+                TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ResponseContent);
+                
+                if (FJsonSerializer::Deserialize(Reader, JsonObject) && JsonObject.IsValid())
+                {
+                    FString UploadedModelName;
+                    if (JsonObject->TryGetStringField(TEXT("name"), UploadedModelName))
+                    {
+                        UE_LOG(LogTemp, Log, TEXT("Model uploaded successfully: %s"), *UploadedModelName);
+                        Callback(UploadedModelName, true);
+                        return;
+                    }
+                }
+                
+                UE_LOG(LogTemp, Warning, TEXT("Model uploaded but failed to parse response: %s"), *ResponseContent);
+                Callback(TEXT(""), false);
+            }
+            else
+            {
+                UE_LOG(LogTemp, Warning, TEXT("NetworkManager Model Upload failed: %s"), *Error.ErrorMessage);
+                Callback(TEXT(""), false);
+            }
+        }
+    );
+    Request->ProcessRequest();
+}
+
+void UComfyUINetworkManager::DownloadModel(const FString& Url, TFunction<void(const TArray<uint8>& ModelData, bool bSuccess)> Callback)
+{
+    if (!HttpModule) HttpModule = &FHttpModule::Get();
+    
+    TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = HttpModule->CreateRequest();
+    Request->SetURL(Url);
+    Request->SetVerb(TEXT("GET"));
+    Request->SetTimeout(120.0f);
+    
+    Request->OnProcessRequestComplete().BindLambda(
+        [this, Callback](FHttpRequestPtr Req, FHttpResponsePtr Resp, bool bSuccess)
+        {
+            // 分析HTTP错误
+            FComfyUIError Error = AnalyzeHttpError(Req, Resp, bSuccess);
+            
+            if (Error.ErrorType == EComfyUIErrorType::None)
+            {
+                // 获取模型数据
+                TArray<uint8> ModelData = Resp->GetContent();
+                
+                if (ModelData.Num() > 0)
+                {
+                    UE_LOG(LogTemp, Log, TEXT("Model downloaded successfully: %d bytes"), ModelData.Num());
+                    Callback(ModelData, true);
+                }
+                else
+                {
+                    UE_LOG(LogTemp, Warning, TEXT("Model download completed but no data received"));
+                    Callback(TArray<uint8>(), false);
+                }
+            }
+            else
+            {
+                // 请求失败，记录错误
+                UE_LOG(LogTemp, Warning, TEXT("NetworkManager Model Download failed: %s"), *Error.ErrorMessage);
+                Callback(TArray<uint8>(), false);
+            }
+        }
+    );
+    Request->ProcessRequest();
+}
+
 #pragma optimize("", on)
 void UComfyUINetworkManager::PollQueueStatus(const FString& ServerUrl, const FString& PromptId, TFunction<void(const FString& Response, bool bSuccess)> Callback)
 {
     FString StatusUrl = ServerUrl;
     if (!StatusUrl.EndsWith(TEXT("/")))
-    {
         StatusUrl += TEXT("/");
-    }
     StatusUrl += TEXT("history/") + PromptId;
     
     SendGetRequest(StatusUrl, Callback, 10.0f);
@@ -367,22 +470,6 @@ FComfyUIError UComfyUINetworkManager::AnalyzeHttpError(FHttpRequestPtr Request, 
 bool UComfyUINetworkManager::ShouldRetryRequest(const FComfyUIError& Error, int32 CurrentRetryCount, int32 MaxRetryAttempts)
 {
     return Error.bCanRetry && CurrentRetryCount < MaxRetryAttempts;
-}
-
-void UComfyUINetworkManager::ScheduleRetry(TWeakObjectPtr<UWorld> WorldContext, TFunction<void()> RetryFunction, float DelaySeconds)
-{
-    if (WorldContext.IsValid())
-    {
-        FTimerHandle RetryTimer;
-        WorldContext->GetTimerManager().SetTimer(RetryTimer, 
-            FTimerDelegate::CreateLambda([RetryFunction]() { RetryFunction(); }),
-            DelaySeconds, false);
-    }
-    else
-    {
-        // 没有世界上下文，直接重试
-        RetryFunction();
-    }
 }
 
 FString UComfyUINetworkManager::GetUserFriendlyErrorMessage(const FComfyUIError& Error)

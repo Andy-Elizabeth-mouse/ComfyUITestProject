@@ -31,6 +31,7 @@ public class ComfyUIIntegration : ModuleRules
                 "Slate",
                 "SlateCore",
                 "HTTP",
+                "WebSockets",
                 "Json",
                 "JsonUtilities",
                 "ImageWrapper",
@@ -40,7 +41,10 @@ public class ComfyUIIntegration : ModuleRules
                 "MeshDescription",
                 "StaticMeshDescription",
                 "StaticMeshEditor",
-                "MaterialEditor"
+                "MaterialEditor",
+                
+                // 资产导入相关
+                "AssetTools"
             }
         );
 
@@ -65,7 +69,10 @@ public class ComfyUIIntegration : ModuleRules
                 // 3D模型处理相关
                 "MeshUtilities",
                 "StaticMeshEditor",
-                "MeshBuilder"
+                "MeshBuilder",
+                
+                // 资产导入相关
+                "UnrealEd"
             }
         );
 

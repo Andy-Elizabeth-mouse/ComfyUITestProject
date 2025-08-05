@@ -4,7 +4,8 @@
 #include "Engine/Texture2D.h"
 #include "Workflow/ComfyUIWorkflowService.h"
 
-FComfyUIWorkflowExecutorResult FComfyUIWorkflowExecutor::RunGeneration(
+#pragma optimize("", off)
+void FComfyUIWorkflowExecutor::RunGeneration(
     EComfyUIWorkflowType WorkflowType,
     const FString& Prompt,
     const FString& NegativePrompt,
@@ -33,51 +34,6 @@ FComfyUIWorkflowExecutorResult FComfyUIWorkflowExecutor::RunGeneration(
         Params.Input.SetNegativePrompt(NegativePrompt);
     }
     
-    // 处理图像输入
-    if (InputImage && WorkflowNeedsImageInput(WorkflowType))
-    {
-        // 将UTexture2D转换为图像数据并通过Client上传
-        TArray<uint8> ImageData;
-        if (UComfyUIFileManager::ExtractImageDataFromTexture(InputImage, ImageData))
-        {
-            FString FileName = FString::Printf(TEXT("input_%d.png"), FDateTime::Now().GetTicks());
-            
-            // 使用Client上传图像（同步方式，简化处理）
-            bool bUploadSuccess = false;
-            FString UploadedImageName;
-            
-            if (Client)
-            {
-                Client->UploadImage(ImageData, FileName, [&](const FString& ImageName, bool bSuccess) {
-                    bUploadSuccess = bSuccess;
-                    UploadedImageName = ImageName;
-                });
-                
-                // 简单的同步等待
-                if (bUploadSuccess && !UploadedImageName.IsEmpty())
-                {
-                    Params.Input.SetInputImage(UploadedImageName);
-                }
-                else
-                {
-                    UE_LOG(LogTemp, Warning, TEXT("Failed to upload input image, using default name"));
-                    Params.Input.SetInputImage(TEXT("uploaded_input.png"));
-                }
-            }
-            else
-            {
-                UE_LOG(LogTemp, Warning, TEXT("Client is null, cannot upload image"));
-                Params.Input.SetInputImage(TEXT("uploaded_input.png"));
-            }
-        }
-    }
-    
-    // 处理3D模型输入
-    if (!InputModelPath.IsEmpty() && WorkflowNeedsMeshInput(WorkflowType))
-    {
-        Params.Input.MeshParameters.Add(TEXT("INPUT_MESH"), InputModelPath);
-    }
-    
     // 设置回调
     Params.OnImageGenerated = OnImageGenerated;
     Params.OnMeshGenerated = OnMeshGenerated;
@@ -86,124 +42,214 @@ FComfyUIWorkflowExecutorResult FComfyUIWorkflowExecutor::RunGeneration(
     Params.OnFailed = OnFailed;
     Params.OnCompleted = OnCompleted;
     
-    // 调用执行函数，传递Client实例
-    return ExecuteWorkflow(Params, Client);
+    // 检查是否需要异步上传资源
+    bool bNeedImageUpload = InputImage && WorkflowNeedsImageInput(WorkflowType);
+    bool bNeedModelUpload = !InputModelPath.IsEmpty() && WorkflowNeedsMeshInput(WorkflowType);
+    
+    if (!bNeedImageUpload && !bNeedModelUpload)
+    {
+        // 没有需要上传的资源，直接执行工作流
+        return ExecuteWorkflow(Params, Client);
+    }
+    
+    // 需要异步上传资源，使用共享状态来跟踪上传进度和参数
+    struct FUploadState
+    {
+        int32 TotalUploads = 0;
+        int32 CompletedUploads = 0;
+        bool bHasError = false;
+        FString ErrorMessage;
+        FComfyUIWorkflowExecutorParams SharedParams; // 共享的参数对象
+    };
+    
+    TSharedPtr<FUploadState> UploadState = MakeShared<FUploadState>();
+    UploadState->SharedParams = Params; // 复制参数到共享状态
+    
+    // 计算需要上传的资源总数
+    if (bNeedImageUpload) UploadState->TotalUploads++;
+    if (bNeedModelUpload) UploadState->TotalUploads++;
+    
+    // 定义上传完成后的回调函数
+    auto OnUploadCompleted = [Client, UploadState]() mutable {
+        UploadState->CompletedUploads++;
+        
+        if (UploadState->bHasError)
+        {
+            // 有错误发生，不执行工作流
+            return;
+        }
+        
+        if (UploadState->CompletedUploads >= UploadState->TotalUploads)
+        {
+            ExecuteWorkflow(UploadState->SharedParams, Client);
+        }
+    };
+    
+    // 处理图像上传
+    if (bNeedImageUpload)
+    {
+        TArray<uint8> ImageData;
+        if (UComfyUIFileManager::ExtractImageDataFromTexture(InputImage, ImageData))
+        {
+            FString FileName = FString::Printf(TEXT("input_%d.png"), FDateTime::Now().GetTicks());
+            
+            if (Client)
+            {
+                Client->UploadImage(ImageData, FileName, 
+                    [OnUploadCompleted, UploadState, OnFailed](const FString& ImageName, bool bSuccess) mutable {
+                        if (bSuccess && !ImageName.IsEmpty())
+                        {
+                            UploadState->SharedParams.Input.SetInputImage(ImageName);
+                            UE_LOG(LogTemp, Log, TEXT("Image uploaded successfully: %s"), *ImageName);
+                        }
+                        else
+                        {
+                            UploadState->bHasError = true;
+                            UploadState->ErrorMessage = TEXT("Failed to upload input image");
+                            UE_LOG(LogTemp, Warning, TEXT("Failed to upload input image"));
+                            
+                            FComfyUIError Error(EComfyUIErrorType::ServerError, TEXT("Failed to upload input image"), 0, TEXT(""), false);
+                            OnFailed.ExecuteIfBound(Error, false);
+                        }
+                        
+                        OnUploadCompleted();
+                    });
+            }
+            else
+            {
+                UploadState->bHasError = true;
+                UploadState->ErrorMessage = TEXT("Client is null");
+                FComfyUIError Error(EComfyUIErrorType::UnknownError, TEXT("Client is null"), 0, TEXT(""), false);
+                OnFailed.ExecuteIfBound(Error, false);
+            }
+        }
+        else
+        {
+            UploadState->bHasError = true;
+            UploadState->ErrorMessage = TEXT("Failed to extract image data");
+            FComfyUIError Error(EComfyUIErrorType::UnknownError, TEXT("Failed to extract image data"), 0, TEXT(""), false);
+            OnFailed.ExecuteIfBound(Error, false);
+        }
+    }
+    
+    // 处理3D模型上传
+    if (bNeedModelUpload)
+    {
+        TArray<uint8> ModelData;
+        if (UComfyUIFileManager::LoadArrayFromFile(InputModelPath, ModelData))
+        {
+            FString FileName = FPaths::GetCleanFilename(InputModelPath);
+            
+            if (Client)
+            {
+                Client->UploadModel(ModelData, FileName, 
+                    [OnUploadCompleted, UploadState, OnFailed](const FString& ModelName, bool bSuccess) mutable {
+                        if (bSuccess && !ModelName.IsEmpty())
+                        {
+                            UploadState->SharedParams.Input.MeshParameters.Add(TEXT("INPUT_MESH"), ModelName);
+                            UE_LOG(LogTemp, Log, TEXT("Model uploaded successfully: %s"), *ModelName);
+                        }
+                        else
+                        {
+                            UploadState->bHasError = true;
+                            UploadState->ErrorMessage = TEXT("Failed to upload input model");
+                            UE_LOG(LogTemp, Warning, TEXT("Failed to upload input model"));
+                            
+                            FComfyUIError Error(EComfyUIErrorType::ServerError, TEXT("Failed to upload input model"), 0, TEXT(""), false);
+                            OnFailed.ExecuteIfBound(Error, false);
+                        }
+                        
+                        OnUploadCompleted();
+                    });
+            }
+            else
+            {
+                UploadState->bHasError = true;
+                UploadState->ErrorMessage = TEXT("Client is null");
+                FComfyUIError Error(EComfyUIErrorType::UnknownError, TEXT("Client is null"), 0, TEXT(""), false);
+                OnFailed.ExecuteIfBound(Error, false);
+            }
+        }
+        else
+        {
+            UploadState->bHasError = true;
+            UploadState->ErrorMessage = FString::Printf(TEXT("Failed to load model file: %s"), *InputModelPath);
+            FComfyUIError Error(EComfyUIErrorType::UnknownError, UploadState->ErrorMessage, 0, TEXT(""), false);
+            OnFailed.ExecuteIfBound(Error, false);
+        }
+    }
 }
 
-FComfyUIWorkflowExecutorResult FComfyUIWorkflowExecutor::ExecuteWorkflow(const FComfyUIWorkflowExecutorParams& Params, UComfyUIClient* Client)
+void FComfyUIWorkflowExecutor::ExecuteWorkflow(const FComfyUIWorkflowExecutorParams& Params, UComfyUIClient* Client)
 {
-    FComfyUIWorkflowExecutorResult Result;
-    Result.bSuccess = false;
-    
     // 1. 验证Client有效性
     if (!Client)
     {
-        Result.ErrorMessage = TEXT("Client is null");
-        UE_LOG(LogTemp, Error, TEXT("ExecuteWorkflow: %s"), *Result.ErrorMessage);
-        return Result;
+        UE_LOG(LogTemp, Error, TEXT("ExecuteWorkflow: Client is null"));
+        return;
     }
     
     // 2. 使用WorkflowService构建工作流JSON
     UComfyUIWorkflowService* WorkflowService = UComfyUIWorkflowService::Get();
     if (!WorkflowService)
     {
-        Result.ErrorMessage = TEXT("WorkflowService is not available");
-        UE_LOG(LogTemp, Error, TEXT("ExecuteWorkflow: %s"), *Result.ErrorMessage);
-        return Result;
+        UE_LOG(LogTemp, Error, TEXT("ExecuteWorkflow: WorkflowService is not available"));
+        return;
     }
     
     // 根据WorkflowType获取对应的工作流名称
     FString WorkflowName = GetWorkflowNameFromType(Params.WorkflowType);
     if (WorkflowName.IsEmpty())
     {
-        Result.ErrorMessage = TEXT("Unsupported workflow type");
-        UE_LOG(LogTemp, Error, TEXT("ExecuteWorkflow: %s"), *Result.ErrorMessage);
-        return Result;
+        UE_LOG(LogTemp, Error, TEXT("ExecuteWorkflow: Unsupported workflow type"));
+        return;
+    }
+    
+    // 为3D生成工作流设置输出文件名参数
+    if (Params.WorkflowType == EComfyUIWorkflowType::ImageTo3D || 
+        Params.WorkflowType == EComfyUIWorkflowType::TextTo3D)
+    {
+        // 生成唯一的输出文件名
+        FString Timestamp = FDateTime::Now().ToFormattedString(TEXT("%Y%m%d_%H%M%S"));
+        FString UniqueId = FString::Printf(TEXT("%d"), FDateTime::Now().GetTicks() % 10000);
+        FString OutputFilenamePrefix = FString::Printf(TEXT("Generated3D_%s_%s"), *Timestamp, *UniqueId);
+        
+        // 设置输出文件名参数
+        WorkflowService->SetWorkflowParameter(WorkflowName, TEXT("OUTPUT_FILENAME_PREFIX"), OutputFilenamePrefix);
+        
+        // 将文件名存储到Input参数中，供后续下载使用
+        FComfyUIWorkflowExecutorParams& MutableParams = const_cast<FComfyUIWorkflowExecutorParams&>(Params);
+        MutableParams.Input.TextParameters.Add(TEXT("EXPECTED_OUTPUT_FILENAME"), OutputFilenamePrefix + TEXT(".glb"));
+        
+        UE_LOG(LogTemp, Log, TEXT("Set 3D output filename: %s"), *OutputFilenamePrefix);
     }
     
     // 构建工作流JSON
-    FString WorkflowJson = WorkflowService->BuildWorkflowJson(
-        WorkflowName,
-        Params.Input.TextParameters.FindRef(TEXT("POSITIVE_PROMPT")), // Prompt
-        Params.Input.TextParameters.FindRef(TEXT("NEGATIVE_PROMPT")), // Negative prompt
-        Params.Input.NumericParameters
-    );
+    // 使用WorkflowService构建JSON，传入完整的Input参数
+    FString WorkflowJson = WorkflowService->BuildWorkflowJson(WorkflowName, Params.Input);
     
     if (WorkflowJson.IsEmpty())
     {
-        Result.ErrorMessage = TEXT("Failed to build workflow JSON");
-        UE_LOG(LogTemp, Error, TEXT("ExecuteWorkflow: %s"), *Result.ErrorMessage);
-        return Result;
+        UE_LOG(LogTemp, Error, TEXT("ExecuteWorkflow: Failed to build workflow JSON"));
+        return;
     }
     
     // 3. 创建一个共享的结果指针，用于在回调中更新结果
-    TSharedPtr<FComfyUIWorkflowExecutorResult> SharedResult = MakeShared<FComfyUIWorkflowExecutorResult>();
-    SharedResult->bSuccess = false;
+    // TSharedPtr<FComfyUIWorkflowExecutorResult> SharedResult = MakeShared<FComfyUIWorkflowExecutorResult>();
+    // SharedResult->bSuccess = false;
     
     // 4. 创建包装后的回调，更新SharedResult
-    FOnImageGenerated WrappedOnImageGenerated;
-    if (Params.OnImageGenerated.IsBound())
-    {
-        WrappedOnImageGenerated.BindLambda([SharedResult, OriginalCallback = Params.OnImageGenerated](UTexture2D* GeneratedTexture) {
-            SharedResult->GeneratedTexture = GeneratedTexture;
-            SharedResult->GeneratedImage = GeneratedTexture;  // 保持一致性
-            OriginalCallback.ExecuteIfBound(GeneratedTexture);
-        });
-    }
-    
-    FOnMeshGenerated WrappedOnMeshGenerated;
-    if (Params.OnMeshGenerated.IsBound())
-    {
-        WrappedOnMeshGenerated.BindLambda([SharedResult, OriginalCallback = Params.OnMeshGenerated](UStaticMesh* GeneratedMesh) {
-            SharedResult->GeneratedMesh = GeneratedMesh;
-            OriginalCallback.ExecuteIfBound(GeneratedMesh);
-        });
-    }
-    
-    FOnGenerationCompleted WrappedOnCompleted;
-    if (Params.OnCompleted.IsBound())
-    {
-        WrappedOnCompleted.BindLambda([SharedResult, OriginalCallback = Params.OnCompleted]() {
-            SharedResult->bSuccess = true;
-            SharedResult->ErrorMessage = TEXT("Workflow completed successfully");
-            OriginalCallback.ExecuteIfBound();
-        });
-    }
-    
-    FOnGenerationFailed WrappedOnFailed;
-    if (Params.OnFailed.IsBound())
-    {
-        WrappedOnFailed.BindLambda([SharedResult, OriginalCallback = Params.OnFailed](const FComfyUIError& Error, bool bCanRetry) {
-            SharedResult->bSuccess = false;
-            SharedResult->ErrorMessage = Error.ErrorMessage;
-            OriginalCallback.ExecuteIfBound(Error, bCanRetry);
-        });
-    }
-    else
-    {
-        // 如果没有提供OnFailed回调，创建一个默认的
-        WrappedOnFailed.BindLambda([SharedResult](const FComfyUIError& Error, bool bCanRetry) {
-            SharedResult->bSuccess = false;
-            SharedResult->ErrorMessage = Error.ErrorMessage;
-        });
-    }
     
     // 5. 通过Client执行工作流
     Client->ExecuteWorkflow(WorkflowJson, 
                            Params.OnStarted,
                            Params.OnProgress,
-                           WrappedOnImageGenerated,
-                           WrappedOnMeshGenerated,
-                           WrappedOnFailed,
-                           WrappedOnCompleted);
-    
-    // 6. 返回初始结果（异步操作，实际结果在回调中更新）
-    Result.bSuccess = true;
-    Result.ErrorMessage = TEXT("Workflow execution initiated successfully");
-    UE_LOG(LogTemp, Log, TEXT("ExecuteWorkflow: %s"), *Result.ErrorMessage);
-    
-    return Result;
+                           Params.OnImageGenerated,
+                           Params.OnMeshGenerated,
+                           Params.OnFailed,
+                           Params.OnCompleted);
 }
+#pragma optimize("", on)
 
 bool FComfyUIWorkflowExecutor::WorkflowNeedsImageInput(EComfyUIWorkflowType WorkflowType)
 {

@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "UObject/NoExportTypes.h"
 #include "ComfyUIWorkflowConfig.h"
+#include "ComfyUIExecutionTypes.h"
 #include "ComfyUIWorkflowService.generated.h"
 
 class UComfyUIWorkflowManager;
@@ -33,6 +34,9 @@ public:
     /** 关闭服务 */
     UFUNCTION(BlueprintCallable, Category = "ComfyUI|Workflow")
     void Shutdown();
+    
+    /** 静态方法：关闭和清理全局实例 */
+    static void ShutdownGlobal();
 
     // ========== 工作流管理接口 ==========
     
@@ -58,31 +62,9 @@ public:
 
     // ========== JSON构建接口 ==========
     
-    /** 构建工作流JSON - 蓝图版本 */
-    UFUNCTION(BlueprintCallable, Category = "ComfyUI|Workflow")
+    /** 构建工作流JSON - 使用完整的FComfyUIWorkflowInput参数 */
     FString BuildWorkflowJson(const FString& WorkflowName, 
-                             const FString& Prompt, 
-                             const FString& NegativePrompt,
-                             const TMap<FString, FString>& Parameters);
-    
-    /** 构建工作流JSON - C++重载版本，支持默认参数 */
-    FString BuildWorkflowJson(const FString& WorkflowName, 
-                             const FString& Prompt, 
-                             const FString& NegativePrompt);
-    
-    /** 构建工作流JSON - 支持float参数的版本 */
-    FString BuildWorkflowJson(const FString& WorkflowName, 
-                             const FString& Prompt, 
-                             const FString& NegativePrompt,
-                             const TMap<FString, float>& Parameters);
-    
-    /** 构建带图像的工作流JSON - C++专用，不暴露给蓝图 */
-    void BuildWorkflowJsonWithImage(const FString& WorkflowName,
-                                   const FString& Prompt,
-                                   const FString& NegativePrompt,
-                                   const TArray<uint8>& ImageData,
-                                   const FString& ServerUrl,
-                                   TFunction<void(const FString& WorkflowJson, bool bSuccess)> Callback);
+                             const FComfyUIWorkflowInput& Input);
 
     // ========== 参数管理接口 ==========
     

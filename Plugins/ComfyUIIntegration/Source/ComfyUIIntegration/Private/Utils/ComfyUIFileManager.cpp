@@ -16,6 +16,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "Dom/JsonObject.h"
 #include "Engine/TextureMipDataProviderFactory.h"
+#include "Framework/Application/SlateApplication.h"
 
 bool UComfyUIFileManager::LoadImageFromFile(const FString& FilePath, TArray<uint8>& OutImageData)
 {
@@ -25,6 +26,11 @@ bool UComfyUIFileManager::LoadImageFromFile(const FString& FilePath, TArray<uint
 bool UComfyUIFileManager::SaveArrayToFile(const TArray<uint8>& Data, const FString& FilePath)
 {
     return FFileHelper::SaveArrayToFile(Data, *FilePath);
+}
+
+bool UComfyUIFileManager::LoadArrayFromFile(const FString& FilePath, TArray<uint8>& OutData)
+{
+    return FFileHelper::LoadFileToArray(OutData, *FilePath);
 }
 
 bool UComfyUIFileManager::LoadJsonFromFile(const FString& FilePath, FString& OutJsonContent)
@@ -521,7 +527,7 @@ bool UComfyUIFileManager::ShowOpenFileDialog(const FString& DialogTitle, const F
     if (DesktopPlatform)
     {
         return DesktopPlatform->OpenFileDialog(
-            nullptr,
+            FSlateApplication::Get().FindBestParentWindowHandleForDialogs(nullptr),
             DialogTitle,
             DefaultPath,
             TEXT(""),
@@ -540,7 +546,7 @@ bool UComfyUIFileManager::ShowSaveFileDialog(const FString& DialogTitle, const F
     {
         TArray<FString> OutFileNames;
         bool bResult = DesktopPlatform->SaveFileDialog(
-            nullptr,
+            FSlateApplication::Get().FindBestParentWindowHandleForDialogs(nullptr),
             DialogTitle,
             DefaultPath,
             DefaultFileName,

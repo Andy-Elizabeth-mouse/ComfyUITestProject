@@ -1,6 +1,8 @@
 #include "ComfyUIIntegration.h"
 #include "ComfyUIIntegrationStyle.h"
 #include "ComfyUIIntegrationCommands.h"
+#include "Workflow/ComfyUIWorkflowService.h"
+#include "Client/ComfyUIClient.h"
 #include "LevelEditor.h"
 #include "Widgets/Docking/SDockTab.h"
 #include "Widgets/Layout/SBox.h"
@@ -44,17 +46,24 @@ void FComfyUIIntegrationModule::StartupModule()
         FOnSpawnTab::CreateRaw(this, &FComfyUIIntegrationModule::OnSpawnComfyUITab))
         .SetDisplayName(LOCTEXT("FComfyUIIntegrationTabTitle", "ComfyUI 集成"))
         .SetMenuType(ETabSpawnerMenuType::Hidden);
+        
+    // 初始化 ComfyUI 客户端单例
+    UComfyUIClient::GetInstance();
 }
 
 void FComfyUIIntegrationModule::ShutdownModule()
 {
     UE_LOG(LogComfyUIIntegration, Warning, TEXT("ComfyUI Integration module has been unloaded"));
     
+    // 销毁 ComfyUI 客户端单例
+    UComfyUIClient::DestroyInstance();
+    
     // 注销Tab生成器
     FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(ComfyUIIntegrationTabName);
     
     // 清理
     UnregisterMenus();
+    UComfyUIWorkflowService::ShutdownGlobal();
     FComfyUIIntegrationStyle::Shutdown();
     FComfyUIIntegrationCommands::Unregister();
 }

@@ -13,12 +13,44 @@
 #include "IImageWrapperModule.h"
 #include "Modules/ModuleManager.h"
 #include "Dom/JsonObject.h"
+#include "JsonObjectConverter.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "TimerManager.h"
 #include "HAL/PlatformFilemanager.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Containers/Ticker.h"
+
+// 单例实例声明
+UComfyUIClient* UComfyUIClient::Instance = nullptr;
+
+UComfyUIClient* UComfyUIClient::GetInstance()
+{
+    if (!Instance)
+    {
+        // 在编辑器模式下，使用Transient包创建单例
+        Instance = NewObject<UComfyUIClient>(GetTransientPackage(), UComfyUIClient::StaticClass());
+        if (Instance)
+        {
+            // 设置默认服务器URL
+            Instance->SetServerUrl(TEXT("http://192.168.2.169:8188"));
+                
+            // 添加到根引用以防止被垃圾回收
+            Instance->AddToRoot();
+        }
+    }
+    return Instance;
+}
+
+void UComfyUIClient::DestroyInstance()
+{
+    if (Instance)
+    {
+        Instance->RemoveFromRoot();
+        Instance = nullptr;
+    }
+}
 
 UComfyUIClient::UComfyUIClient()
 {
@@ -26,8 +58,9 @@ UComfyUIClient::UComfyUIClient()
     // 初始化网络管理器，用于封装 HTTP 请求
     // 注意：在默认构造函数中不能创建默认子对象，需要使用带ObjectInitializer的构造函数
     NetworkManager = nullptr;
-    ServerUrl = TEXT("http://127.0.0.1:8188");
-    WorldContext = nullptr;
+    ServerUrl = TEXT("http://192.168.2.169:8188");
+    LastPollTime = 0.0f;
+    bIsPolling = false;
 }
 
 UComfyUIClient::UComfyUIClient(const FObjectInitializer& ObjectInitializer)
@@ -36,20 +69,15 @@ UComfyUIClient::UComfyUIClient(const FObjectInitializer& ObjectInitializer)
     HttpModule = &FHttpModule::Get();
     // 使用ObjectInitializer创建默认子对象
     NetworkManager = ObjectInitializer.CreateDefaultSubobject<UComfyUINetworkManager>(this, TEXT("NetworkManager"));
-    ServerUrl = TEXT("http://127.0.0.1:8188");
-    WorldContext = nullptr;
-}
-
-void UComfyUIClient::SetWorldContext(UWorld* InWorld)
-{
-    WorldContext = InWorld;
+    ServerUrl = TEXT("http://192.168.2.169:8188");
+    LastPollTime = 0.0f;
+    bIsPolling = false;
 }
 
 void UComfyUIClient::EnsureNetworkManagerInitialized()
 {
     if (!NetworkManager)
     {
-        // 如果使用了默认构造函数，需要在这里创建NetworkManager
         NetworkManager = NewObject<UComfyUINetworkManager>(this);
         UE_LOG(LogTemp, Warning, TEXT("NetworkManager was created using NewObject - this should be done via ObjectInitializer in constructor"));
     }
@@ -58,21 +86,6 @@ void UComfyUIClient::EnsureNetworkManagerInitialized()
 void UComfyUIClient::SetServerUrl(const FString& Url)
 {
     ServerUrl = Url;
-}
-
-void UComfyUIClient::SetRetryConfiguration(int32 MaxRetries, float RetryDelay)
-{
-    MaxRetryAttempts = FMath::Max(0, MaxRetries);
-    RetryDelaySeconds = FMath::Max(0.1f, RetryDelay);
-    
-    UE_LOG(LogTemp, Log, TEXT("Set retry configuration: MaxRetries=%d, RetryDelay=%.2fs"), MaxRetryAttempts, RetryDelaySeconds);
-}
-
-void UComfyUIClient::SetRequestTimeout(float TimeoutSeconds)
-{
-    RequestTimeoutSeconds = FMath::Max(5.0f, TimeoutSeconds);
-    
-    UE_LOG(LogTemp, Log, TEXT("Set request timeout: %.2fs"), RequestTimeoutSeconds);
 }
 
 void UComfyUIClient::CheckServerStatus()
@@ -101,71 +114,6 @@ void UComfyUIClient::CheckServerStatus()
     }
 }
 
-void UComfyUIClient::GetAvailableWorkflows()
-{
-    // 工作流列表现在通过工作流服务管理
-    UComfyUIWorkflowService* WorkflowService = UComfyUIWorkflowService::Get();
-    if (WorkflowService)
-    {
-        WorkflowService->RefreshWorkflows();
-    }
-}
-
-TArray<FString> UComfyUIClient::GetAvailableWorkflowNames() const
-{
-    UComfyUIWorkflowService* WorkflowService = UComfyUIWorkflowService::Get();
-    if (WorkflowService)
-    {
-        return WorkflowService->GetAvailableWorkflowNames();
-    }
-    return TArray<FString>();
-}
-
-void UComfyUIClient::OnPromptSubmitted(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful)
-{
-    FComfyUIError Error = AnalyzeHttpError(Request, Response, bWasSuccessful);
-    
-    if (Error.ErrorType != EComfyUIErrorType::None)
-    {
-        HandleRequestError(Error, nullptr);
-        return;
-    }
-
-    FString ResponseContent = Response->GetContentAsString();
-    UE_LOG(LogTemp, Log, TEXT("Prompt submitted successfully: %s"), *ResponseContent);
-
-    // 解析响应获取prompt_id
-    TSharedPtr<FJsonObject> JsonObject;
-    TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ResponseContent);
-    if (FJsonSerializer::Deserialize(Reader, JsonObject))
-    {
-        CurrentPromptId = JsonObject->GetStringField(TEXT("prompt_id"));
-        if (!CurrentPromptId.IsEmpty())
-        {
-            // 重置重试状态，因为这一步成功了
-            ResetRetryState();
-            // 开始轮询生成状态
-            PollGenerationStatus(CurrentPromptId);
-        }
-        else
-        {
-            FComfyUIError JsonError(EComfyUIErrorType::InvalidWorkflow, 
-                                  TEXT("服务器响应中缺少prompt_id字段"), 
-                                  0,
-                                  TEXT("检查ComfyUI服务器版本是否兼容"), false);
-            HandleRequestError(JsonError, [this]() { RetryCurrentOperation(); });
-        }
-    }
-    else
-    {
-        FComfyUIError JsonError(EComfyUIErrorType::InvalidWorkflow, 
-                              TEXT("无法解析服务器响应JSON"),
-                              0,
-                              TEXT("检查服务器响应格式"), false);
-        HandleRequestError(JsonError, [this]() { RetryCurrentOperation(); });
-    }
-}
-
 void UComfyUIClient::PollGenerationStatus(const FString& PromptId)
 {
     // 使用 NetworkManager 进行状态轮询
@@ -186,6 +134,11 @@ void UComfyUIClient::PollGenerationStatus(const FString& PromptId)
     }
 }
 
+void UComfyUIClient::PollGenerationStatus()
+{
+    PollGenerationStatus(CurrentPromptId);
+}
+#pragma optimize("", off)
 void UComfyUIClient::OnQueueStatusChecked(const FString& ResponseContent, bool bWasSuccessful)
 {
     if (!bWasSuccessful)
@@ -193,7 +146,7 @@ void UComfyUIClient::OnQueueStatusChecked(const FString& ResponseContent, bool b
         FComfyUIError Error(EComfyUIErrorType::ConnectionFailed, TEXT("无法获取生成状态"), 0, TEXT("检查网络连接"), true);
         
         // 对于状态检查失败，我们可以重试状态查询而不是整个生成过程
-        if (ShouldRetryRequest(Error))
+        if (NetworkManager->ShouldRetryRequest(Error, CurrentRetryCount, MaxRetryAttempts))
         {
             CurrentRetryCount++;
             OnRetryAttemptCallback.ExecuteIfBound(CurrentRetryCount);
@@ -201,14 +154,8 @@ void UComfyUIClient::OnQueueStatusChecked(const FString& ResponseContent, bool b
             UE_LOG(LogTemp, Warning, TEXT("Retrying status check... Attempt %d/%d"), 
                    CurrentRetryCount, MaxRetryAttempts);
             
-            if (NetworkManager)
-            {
-                NetworkManager->ScheduleRetry(WorldContext, [this]() { PollGenerationStatus(CurrentPromptId); }, RetryDelaySeconds);
-            }
-            else
-            {
-                PollGenerationStatus(CurrentPromptId);
-            }
+            // 使用异步重试代替计时器
+            StartAsyncRetry([this]() { PollGenerationStatus(CurrentPromptId); }, RetryDelaySeconds);
         }
         else
         {
@@ -217,7 +164,7 @@ void UComfyUIClient::OnQueueStatusChecked(const FString& ResponseContent, bool b
         return;
     }
 
-    UE_LOG(LogTemp, Log, TEXT("Queue status response: %s"), *ResponseContent);
+    UE_LOG(LogTemp, VeryVerbose, TEXT("Queue status response: %s"), *ResponseContent);
     
     // 解析队列状态并更新进度
     FComfyUIProgressInfo ProgressInfo = ParseQueueStatus(ResponseContent);
@@ -232,16 +179,22 @@ void UComfyUIClient::OnQueueStatusChecked(const FString& ResponseContent, bool b
     // 解析响应检查是否完成
     TSharedPtr<FJsonObject> JsonObject;
     TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ResponseContent);
+    
+    bool bGenerationComplete = false;
+    
     if (FJsonSerializer::Deserialize(Reader, JsonObject))
     {
         // 检查是否有历史记录（表示完成）
         if (JsonObject->HasField(CurrentPromptId))
         {
+            bGenerationComplete = true;
+            
             // 生成完成，获取输出信息
             TSharedPtr<FJsonObject> PromptHistory = JsonObject->GetObjectField(CurrentPromptId);
             if (PromptHistory.IsValid() && PromptHistory->HasField(TEXT("outputs")))
             {
                 TSharedPtr<FJsonObject> Outputs = PromptHistory->GetObjectField(TEXT("outputs"));
+                UE_LOG(LogTemp, Log, TEXT("Generation completed with outputs: %s"), *ResponseContent);
                 
                 // 查找输出节点
                 bool bFoundOutput = false;
@@ -279,22 +232,43 @@ void UComfyUIClient::OnQueueStatusChecked(const FString& ResponseContent, bool b
                         FString MeshFilename;
                         FString MeshSubfolder;
                         
-                        // 检查不同的可能输出格式 - 统一处理逻辑
-                        TArray<FString> MeshFieldNames = {TEXT("gltf"), TEXT("glb"), TEXT("meshes"), TEXT("mesh")};
-                        
-                        for (const FString& FieldName : MeshFieldNames)
+                        // 检查文本输出（ShowText节点输出的文件路径）
+                        if (OutputNode->HasField(TEXT("text")))
                         {
-                            if (OutputNode->HasField(FieldName))
+                            const TArray<TSharedPtr<FJsonValue>>* TextArray;
+                            if (OutputNode->TryGetArrayField(TEXT("text"), TextArray) && TextArray->Num() > 0)
                             {
-                                const TArray<TSharedPtr<FJsonValue>>* MeshArray;
-                                if (OutputNode->TryGetArrayField(FieldName, MeshArray) && MeshArray->Num() > 0)
+                                FString TextOutput = (*TextArray)[0]->AsString();
+                                if (!TextOutput.IsEmpty() && (TextOutput.EndsWith(TEXT(".glb")) || TextOutput.EndsWith(TEXT(".gltf"))))
                                 {
-                                    TSharedPtr<FJsonObject> MeshInfo = (*MeshArray)[0]->AsObject();
-                                    if (MeshInfo.IsValid())
+                                    // 从文本输出中提取文件名
+                                    MeshFilename = FPaths::GetCleanFilename(TextOutput);
+                                    MeshSubfolder = TEXT(""); // ShowText输出的是完整路径，通常不包含子文件夹
+                                    
+                                    UE_LOG(LogTemp, Log, TEXT("Found 3D model path from text output: %s"), *TextOutput);
+                                }
+                            }
+                        }
+                        
+                        // 如果没有从文本输出找到，检查传统的3D模型输出格式
+                        if (MeshFilename.IsEmpty())
+                        {
+                            TArray<FString> MeshFieldNames = {TEXT("gltf"), TEXT("glb"), TEXT("meshes"), TEXT("mesh")};
+                            
+                            for (const FString& FieldName : MeshFieldNames)
+                            {
+                                if (OutputNode->HasField(FieldName))
+                                {
+                                    const TArray<TSharedPtr<FJsonValue>>* MeshArray;
+                                    if (OutputNode->TryGetArrayField(FieldName, MeshArray) && MeshArray->Num() > 0)
                                     {
-                                        MeshFilename = MeshInfo->GetStringField(TEXT("filename"));
-                                        MeshSubfolder = MeshInfo->GetStringField(TEXT("subfolder"));
-                                        break; // 找到第一个有效的就停止
+                                        TSharedPtr<FJsonObject> MeshInfo = (*MeshArray)[0]->AsObject();
+                                        if (MeshInfo.IsValid())
+                                        {
+                                            MeshFilename = MeshInfo->GetStringField(TEXT("filename"));
+                                            MeshSubfolder = MeshInfo->GetStringField(TEXT("subfolder"));
+                                            break; // 找到第一个有效的就停止
+                                        }
                                     }
                                 }
                             }
@@ -324,34 +298,38 @@ void UComfyUIClient::OnQueueStatusChecked(const FString& ResponseContent, bool b
                 }
             }
         }
-        else
+    }
+    else
+    {
+        // JSON解析失败，但在生成过程中这可能是正常的（空响应）
+        UE_LOG(LogTemp, Log, TEXT("JSON parsing failed - this is normal during generation, continuing to poll"));
+    }
+    
+    // 无论JSON解析是否成功，只要生成未完成，就继续轮询
+    if (!bGenerationComplete)
+    {
+        UE_LOG(LogTemp, VeryVerbose, TEXT("Generation still in progress, continuing to poll..."));
+        
+        // 使用异步轮询代替计时器
+        if (!bIsPolling)
         {
-            // 还未完成，继续轮询
-            if (WorldContext.IsValid())
-            {
-                WorldContext->GetTimerManager().SetTimer(StatusPollTimer, 
-                    FTimerDelegate::CreateLambda([this]() { PollGenerationStatus(CurrentPromptId); }),
-                    2.0f, false); // 2秒后再次检查
-            }
-            else
-            {
-                FComfyUIError ContextError(EComfyUIErrorType::UnknownError, 
-                                        TEXT("无效的世界上下文，无法管理计时器"), 0,
-                                        TEXT("重新启动生成过程"), true);
-                HandleRequestError(ContextError, [this]() { RetryCurrentOperation(); });
-            }
+            StartAsyncPolling();
         }
     }
     else
     {
-        FComfyUIError JsonError(EComfyUIErrorType::JsonParsingError, 
-                                TEXT("无法解析状态响应的JSON格式"), 
-                                0,
-                                TEXT("检查ComfyUI服务器状态"), true);
-        HandleRequestError(JsonError, [this]() { PollGenerationStatus(CurrentPromptId); });
+        // 生成完成，停止轮询
+        StopAsyncPolling();
+        UE_LOG(LogTemp, Log, TEXT("Generation completed, stopped async polling"));
+        
+        // 重置重试状态
+        ResetRetryState();
+        
+        // 通知生成完成
+        OnGenerationCompletedCallback.ExecuteIfBound();
     }
 }
-
+#pragma optimize("", on)
 void UComfyUIClient::OnImageDownloaded(const TArray<uint8>& ImageData, bool bWasSuccessful)
 {
     if (!bWasSuccessful)
@@ -391,7 +369,7 @@ void UComfyUIClient::OnImageDownloaded(const TArray<uint8>& ImageData, bool bWas
         ResetRetryState();
         
         // 通知生成完成
-        OnGenerationCompletedCallback.ExecuteIfBound();
+        // OnGenerationCompletedCallback.ExecuteIfBound();
         
         // 最后通知图像生成完成
         OnImageGeneratedCallback.ExecuteIfBound(GeneratedTexture);
@@ -470,38 +448,16 @@ void UComfyUIClient::TestServerConnection(const FOnConnectionTested& OnComplete)
 
 // ========== 错误处理和重试机制 ==========
 
-FComfyUIError UComfyUIClient::AnalyzeHttpError(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bWasSuccessful)
-{
-    // 调用 NetworkManager 的 AnalyzeHttpError
-    EnsureNetworkManagerInitialized();
-    if (NetworkManager)
-    {
-        return NetworkManager->AnalyzeHttpError(Request, Response, bWasSuccessful);
-    }
-    // 兜底逻辑（防止 NetworkManager 未初始化）
-    return FComfyUIError(EComfyUIErrorType::UnknownError, TEXT("NetworkManager 未初始化"), 0, TEXT("请检查插件初始化流程"), false);
-}
-
-bool UComfyUIClient::ShouldRetryRequest(const FComfyUIError& Error)
-{
-    // 调用 NetworkManager 的 ShouldRetryRequest
-    EnsureNetworkManagerInitialized();
-    if (NetworkManager)
-    {
-        return NetworkManager->ShouldRetryRequest(Error, CurrentRetryCount, MaxRetryAttempts);
-    }
-    return false;
-}
-
 void UComfyUIClient::HandleRequestError(const FComfyUIError& Error, TFunction<void()> RetryFunction)
 {
+    EnsureNetworkManagerInitialized();
     LastErrorType = Error.ErrorType;
     LastErrorMessage = Error.ErrorMessage;
     
     UE_LOG(LogTemp, Error, TEXT("ComfyUI Request Error: %s (Type: %d, HTTP: %d)"), 
            *Error.ErrorMessage, (int32)Error.ErrorType, Error.HttpStatusCode);
            
-    if (ShouldRetryRequest(Error))
+    if (NetworkManager->ShouldRetryRequest(Error, CurrentRetryCount, MaxRetryAttempts))
     {
         CurrentRetryCount++;
         
@@ -510,16 +466,8 @@ void UComfyUIClient::HandleRequestError(const FComfyUIError& Error, TFunction<vo
                
         OnRetryAttemptCallback.ExecuteIfBound(CurrentRetryCount);
         
-        // 延迟重试由 NetworkManager 统一调度
-        if (NetworkManager)
-        {
-            NetworkManager->ScheduleRetry(WorldContext, RetryFunction, RetryDelaySeconds);
-        }
-        else
-        {
-            // 没有NetworkManager时的兜底处理
-            RetryFunction();
-        }
+        // 使用异步重试代替计时器
+        StartAsyncRetry(RetryFunction, RetryDelaySeconds);
     }
     else
     {
@@ -608,11 +556,9 @@ void UComfyUIClient::CancelCurrentGeneration()
 {
     bIsCancelled = true;
     
-    // 清除计时器
-    if (WorldContext.IsValid())
-    {
-        WorldContext->GetTimerManager().ClearTimer(StatusPollTimer);
-    }
+    // 停止异步轮询和重试
+    StopAsyncPolling();
+    StopAsyncRetry();
     
     // 取消当前HTTP请求
     if (CurrentRequest.IsValid())
@@ -624,6 +570,9 @@ void UComfyUIClient::CancelCurrentGeneration()
     // 重置状态
     CurrentPromptId.Empty();
     ResetRetryState();
+    
+    // 通知UI生成已完成（被取消），以便重新启用按钮
+    OnGenerationCompletedCallback.ExecuteIfBound();
     
     UE_LOG(LogTemp, Log, TEXT("Generation cancelled"));
 }
@@ -775,6 +724,26 @@ void UComfyUIClient::UploadImage(const TArray<uint8>& ImageData, const FString& 
     NetworkManager->UploadImage(ServerUrl, ImageData, FileName, Callback);
 }
 
+void UComfyUIClient::UploadModel(const TArray<uint8>& ModelData, const FString& FileName, 
+                                TFunction<void(const FString& UploadedModelName, bool bSuccess)> Callback)
+{
+    // 确保NetworkManager已初始化
+    EnsureNetworkManagerInitialized();
+    
+    // 使用NetworkManager上传3D模型
+    NetworkManager->UploadModel(ServerUrl, ModelData, FileName, Callback);
+}
+
+void UComfyUIClient::DownloadModel(const FString& Url, 
+                                  TFunction<void(const TArray<uint8>& ModelData, bool bSuccess)> Callback)
+{
+    // 确保NetworkManager已初始化
+    EnsureNetworkManagerInitialized();
+    
+    // 使用NetworkManager下载3D模型
+    NetworkManager->DownloadModel(Url, Callback);
+}
+
 void UComfyUIClient::DownloadGenerated3DModel(const FString& Filename, const FString& Subfolder)
 {
     // 构建3D模型下载URL
@@ -800,7 +769,7 @@ void UComfyUIClient::DownloadGenerated3DModel(const FString& Filename, const FSt
     EnsureNetworkManagerInitialized();
     if (NetworkManager)
     {
-        NetworkManager->DownloadImage(ModelUrl, [this, Filename](const TArray<uint8>& ModelData, bool bSuccess) {
+        NetworkManager->DownloadModel(ModelUrl, [this, Filename](const TArray<uint8>& ModelData, bool bSuccess) {
             On3DModelDownloaded(ModelData, bSuccess, Filename);
         });
     }
@@ -843,7 +812,7 @@ void UComfyUIClient::On3DModelDownloaded(const TArray<uint8>& ModelData, bool bW
         ResetRetryState();
         
         // 通知生成完成
-        OnGenerationCompletedCallback.ExecuteIfBound();
+        // OnGenerationCompletedCallback.ExecuteIfBound();
         
         // 最后通知3D模型生成完成
         OnMeshGeneratedCallback.ExecuteIfBound(GeneratedMesh);
@@ -856,4 +825,102 @@ void UComfyUIClient::On3DModelDownloaded(const TArray<uint8>& ModelData, bool bW
                               TEXT("检查模型格式是否支持，或尝试重新生成"), true);
         HandleRequestError(MeshError, [this]() { RetryCurrentOperation(); });
     }
+}
+
+// 异步轮询相关方法实现
+void UComfyUIClient::StartAsyncPolling()
+{
+    if (!bIsPolling)
+    {
+        bIsPolling = true;
+        LastPollTime = FPlatformTime::Seconds();
+        
+        // 使用 FTSTicker 进行异步轮询
+        TickerHandle = FTSTicker::GetCoreTicker().AddTicker(
+            FTickerDelegate::CreateUObject(this, &UComfyUIClient::HandleAsyncPoll),
+            0.0f  // 每帧检查
+        );
+        
+        UE_LOG(LogTemp, VeryVerbose, TEXT("Started async polling"));
+    }
+}
+
+void UComfyUIClient::StopAsyncPolling()
+{
+    if (bIsPolling)
+    {
+        bIsPolling = false;
+        
+        if (TickerHandle.IsValid())
+        {
+            FTSTicker::GetCoreTicker().RemoveTicker(TickerHandle);
+            TickerHandle.Reset();
+        }
+        
+        UE_LOG(LogTemp, VeryVerbose, TEXT("Stopped async polling"));
+    }
+}
+
+bool UComfyUIClient::HandleAsyncPoll(float DeltaTime)
+{
+    if (!bIsPolling || bIsCancelled)
+    {
+        return false; // 停止 ticker
+    }
+    
+    float CurrentTime = FPlatformTime::Seconds();
+    if (CurrentTime - LastPollTime >= PollInterval)
+    {
+        LastPollTime = CurrentTime;
+        
+        // 执行轮询逻辑
+        UE_LOG(LogTemp, VeryVerbose, TEXT("Async poll: checking generation status"));
+        PollGenerationStatus();
+    }
+    
+    return true; // 继续 ticker
+}
+
+// 异步重试相关方法实现
+void UComfyUIClient::StartAsyncRetry(TFunction<void()> RetryFunction, float DelaySeconds)
+{
+    PendingRetryFunction = RetryFunction;
+    RetryStartTime = FPlatformTime::Seconds();
+    
+    // 使用 FTSTicker 进行异步重试
+    RetryTickerHandle = FTSTicker::GetCoreTicker().AddTicker(
+        FTickerDelegate::CreateUObject(this, &UComfyUIClient::HandleAsyncRetry),
+        0.0f  // 每帧检查
+    );
+    
+    UE_LOG(LogTemp, VeryVerbose, TEXT("Started async retry with delay %.2f seconds"), DelaySeconds);
+}
+
+void UComfyUIClient::StopAsyncRetry()
+{
+    if (RetryTickerHandle.IsValid())
+    {
+        FTSTicker::GetCoreTicker().RemoveTicker(RetryTickerHandle);
+        RetryTickerHandle.Reset();
+        PendingRetryFunction = nullptr;
+    }
+}
+
+bool UComfyUIClient::HandleAsyncRetry(float DeltaTime)
+{
+    float CurrentTime = FPlatformTime::Seconds();
+    if (CurrentTime - RetryStartTime >= RetryDelaySeconds)
+    {
+        // 时间到了，执行重试
+        if (PendingRetryFunction)
+        {
+            UE_LOG(LogTemp, VeryVerbose, TEXT("Async retry: executing retry function"));
+            PendingRetryFunction();
+            PendingRetryFunction = nullptr;
+        }
+        
+        return false; // 停止 ticker
+    }
+    
+    return true; // 继续等待
 }

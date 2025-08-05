@@ -66,6 +66,10 @@ public:
     // 保存字节数组到文件
     UFUNCTION(BlueprintCallable, Category = "ComfyUI|File")
     static bool SaveArrayToFile(const TArray<uint8>& Data, const FString& FilePath);
+    
+    // 从文件加载字节数组
+    UFUNCTION(BlueprintCallable, Category = "ComfyUI|File")
+    static bool LoadArrayFromFile(const FString& FilePath, TArray<uint8>& OutData);
 
     // === 文件对话框操作 ===
     // 打开文件选择对话框

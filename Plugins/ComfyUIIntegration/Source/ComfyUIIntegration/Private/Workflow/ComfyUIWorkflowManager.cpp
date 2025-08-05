@@ -321,8 +321,7 @@ bool UComfyUIWorkflowManager::ExportWorkflowConfig(const FWorkflowConfig& Config
 
 // ========== 工作流JSON构建 ==========
 #pragma optimize("", off)
-FString UComfyUIWorkflowManager::BuildCustomWorkflowJson(const FString& Prompt, const FString& NegativePrompt, 
-                                                         const FString& CustomWorkflowName)
+FString UComfyUIWorkflowManager::BuildWorkflowJson(const FString& CustomWorkflowName)
 {
     // 查找自定义工作流配置
     FWorkflowConfig* CustomConfig = FindWorkflowConfigInternal(CustomWorkflowName);
@@ -364,7 +363,7 @@ FString UComfyUIWorkflowManager::BuildCustomWorkflowJson(const FString& Prompt, 
     }
 
     // 替换占位符
-    FString ProcessedWorkflow = ReplaceWorkflowPlaceholders(WorkflowTemplate, Prompt, NegativePrompt, CustomConfig->Parameters);
+    FString ProcessedWorkflow = ReplaceWorkflowPlaceholders(WorkflowTemplate, CustomConfig->Parameters);
     
     // 解析处理后的工作流JSON
     TSharedPtr<FJsonObject> FinalWorkflowJson;
@@ -388,15 +387,9 @@ FString UComfyUIWorkflowManager::BuildCustomWorkflowJson(const FString& Prompt, 
 }
 #pragma optimize("", on)
 FString UComfyUIWorkflowManager::ReplaceWorkflowPlaceholders(const FString& WorkflowTemplate, 
-                                                           const FString& Prompt, 
-                                                           const FString& NegativePrompt,
                                                            const TMap<FString, FString>& CustomParameters)
 {
     FString ProcessedTemplate = WorkflowTemplate;
-    
-    // 替换基本占位符
-    ProcessedTemplate = ProcessedTemplate.Replace(TEXT("{POSITIVE_PROMPT}"), *Prompt);
-    ProcessedTemplate = ProcessedTemplate.Replace(TEXT("{NEGATIVE_PROMPT}"), *NegativePrompt);
     
     // 替换自定义参数
     for (const auto& Param : CustomParameters)
@@ -406,14 +399,6 @@ FString UComfyUIWorkflowManager::ReplaceWorkflowPlaceholders(const FString& Work
     }
     
     return ProcessedTemplate;
-}
-
-FString UComfyUIWorkflowManager::ReplaceWorkflowPlaceholders(const FString& WorkflowTemplate, 
-                                                           const FString& Prompt, 
-                                                           const FString& NegativePrompt)
-{
-    TMap<FString, FString> EmptyParameters;
-    return ReplaceWorkflowPlaceholders(WorkflowTemplate, Prompt, NegativePrompt, EmptyParameters);
 }
 
 // ========== 工作流参数管理 ==========
@@ -779,13 +764,13 @@ EComfyUIWorkflowType UComfyUIWorkflowManager::AnalyzEComfyUIWorkflowTypeFromConf
     // 打印详细的输入输出信息
     for (const FWorkflowInputInfo& Input : Inputs)
     {
-        UE_LOG(LogTemp, VeryVerbose, TEXT("  Input: %s (%s) - Type: %d - Display: %s"), 
+        UE_LOG(LogTemp, Log, TEXT("  Input: %s (%s) - Type: %d - Display: %s"), 
                *Input.ParameterName, *Input.PlaceholderValue, (int32)Input.InputType, *Input.DisplayName);
     }
     
     for (const FWorkflowOutputInfo& Output : Outputs)
     {
-        UE_LOG(LogTemp, VeryVerbose, TEXT("  Output: %s (%s) - Type: %d"), 
+        UE_LOG(LogTemp, Log, TEXT("  Output: %s (%s) - Type: %d"), 
                *Output.NodeId, *Output.NodeType, (int32)Output.OutputType);
     }
     

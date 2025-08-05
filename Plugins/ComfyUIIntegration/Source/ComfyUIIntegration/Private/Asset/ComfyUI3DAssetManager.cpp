@@ -18,6 +18,12 @@
 #include "HAL/PlatformFilemanager.h"
 #include "MeshDescription.h"
 #include "StaticMeshAttributes.h"
+#include "AssetImportTask.h"
+#include "AssetToolsModule.h"
+#include "IAssetTools.h"
+#include "Dom/JsonObject.h"
+#include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonReader.h"
 
 UComfyUI3DAssetManager::UComfyUI3DAssetManager()
 {
@@ -63,10 +69,128 @@ UStaticMesh* UComfyUI3DAssetManager::CreateStaticMeshFromOBJ(const TArray<uint8>
 
 UStaticMesh* UComfyUI3DAssetManager::CreateStaticMeshFromGLTF(const TArray<uint8>& GLTFData)
 {
-    // TODO: 实现glTF解析
-    // 这需要第三方库或者UE5的内置glTF导入器
-    UE_LOG(LogTemp, Warning, TEXT("CreateStaticMeshFromGLTF: glTF import not yet implemented"));
-    return nullptr;
+    if (GLTFData.Num() == 0)
+        LOG_AND_RETURN(Error, nullptr, "CreateStaticMeshFromGLTF: Empty glTF data");
+
+    // 创建临时文件来保存glTF数据
+    FString TempDir = FPaths::ProjectIntermediateDir() / TEXT("ComfyUI") / TEXT("TempGLTF");
+    FString TempFileName = FGuid::NewGuid().ToString();
+    
+    // 根据数据内容确定文件扩展名
+    FString FileExtension = TEXT(".gltf");
+    if (GLTFData.Num() >= 4)
+    {
+        uint32 Magic = *reinterpret_cast<const uint32*>(GLTFData.GetData());
+        if (Magic == 0x46546C67) // "glTF" in little-endian
+        {
+            FileExtension = TEXT(".glb");
+        }
+    }
+    
+    FString TempFilePath = TempDir / (TempFileName + FileExtension);
+    
+    // 确保临时目录存在
+    if (!UComfyUIFileManager::EnsureDirectoryExists(TempDir))
+        LOG_AND_RETURN(Error, nullptr, "CreateStaticMeshFromGLTF: Failed to create temp directory: %s", *TempDir);
+
+    // 保存数据到临时文件
+    if (!FFileHelper::SaveArrayToFile(GLTFData, *TempFilePath))
+        LOG_AND_RETURN(Error, nullptr, "CreateStaticMeshFromGLTF: Failed to save temp glTF file: %s", *TempFilePath);
+
+    UE_LOG(LogTemp, Log, TEXT("CreateStaticMeshFromGLTF: Created temp file: %s"), *TempFilePath);
+
+    UStaticMesh* ImportedMesh = nullptr;
+
+    try
+    {
+        // 使用 AssetImportTask 进行导入
+        UAssetImportTask* ImportTask = NewObject<UAssetImportTask>();
+        if (!ImportTask)
+            LOG_AND_RETURN(Error, nullptr, "CreateStaticMeshFromGLTF: Failed to create AssetImportTask");
+
+        // 设置导入任务参数
+        ImportTask->Filename = TempFilePath;
+        ImportTask->DestinationPath = TEXT("/Temp/ComfyUI_GLTFImport");
+        ImportTask->DestinationName = TempFileName;
+        ImportTask->bReplaceExisting = true;
+        ImportTask->bReplaceExistingSettings = true;
+        ImportTask->bAutomated = true;
+        ImportTask->bSave = false; // 不保存到磁盘，只是临时导入
+
+        UE_LOG(LogTemp, Log, TEXT("CreateStaticMeshFromGLTF: Starting import task for file: %s"), *TempFilePath);
+
+        // 获取 AssetTools 模块并执行导入
+        if (FModuleManager::Get().IsModuleLoaded("AssetTools"))
+        {
+            FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools");
+            IAssetTools& AssetTools = AssetToolsModule.Get();
+
+            // 执行导入任务
+            TArray<UAssetImportTask*> ImportTasks;
+            ImportTasks.Add(ImportTask);
+
+            UE_LOG(LogTemp, Log, TEXT("CreateStaticMeshFromGLTF: Executing import tasks"));
+
+            // 使用 IAssetTools::ImportAssetTasks 执行导入
+            AssetTools.ImportAssetTasks(ImportTasks);
+
+            // 检查导入结果
+            if (ImportTask->GetObjects().Num() > 0)
+            {
+                for (UObject* ImportedObject : ImportTask->GetObjects())
+                {
+                    if (UStaticMesh* StaticMesh = Cast<UStaticMesh>(ImportedObject))
+                    {
+                        ImportedMesh = StaticMesh;
+                        UE_LOG(LogTemp, Log, TEXT("CreateStaticMeshFromGLTF: Successfully imported static mesh: %s"), 
+                               *StaticMesh->GetName());
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                UE_LOG(LogTemp, Warning, TEXT("CreateStaticMeshFromGLTF: No objects were imported"));
+            }
+        }
+        else
+        {
+            UE_LOG(LogTemp, Error, TEXT("CreateStaticMeshFromGLTF: AssetTools module not available"));
+        }
+    }
+    catch (const std::exception& Exception)
+    {
+        UE_LOG(LogTemp, Error, TEXT("CreateStaticMeshFromGLTF: std::exception during import: %hs"), Exception.what());
+    }
+    catch (...)
+    {
+        UE_LOG(LogTemp, Error, TEXT("CreateStaticMeshFromGLTF: Unknown exception during import"));
+    }
+
+    // 清理临时文件
+    IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+    if (PlatformFile.FileExists(*TempFilePath))
+    {
+        if (PlatformFile.DeleteFile(*TempFilePath))
+        {
+            UE_LOG(LogTemp, Log, TEXT("CreateStaticMeshFromGLTF: Cleaned up temp file: %s"), *TempFilePath);
+        }
+        else
+        {
+            UE_LOG(LogTemp, Warning, TEXT("CreateStaticMeshFromGLTF: Failed to clean up temp file: %s"), *TempFilePath);
+        }
+    }
+
+    if (ImportedMesh)
+    {
+        LOG_AND_RETURN(Log, ImportedMesh, "CreateStaticMeshFromGLTF: Successfully imported glTF as StaticMesh");
+    }
+    else
+    {
+        // 作为后备方案，我们可以尝试将glTF解析为简单的几何体
+        UE_LOG(LogTemp, Warning, TEXT("CreateStaticMeshFromGLTF: Import failed, attempting fallback parsing"));
+        return CreateFallbackMeshFromGLTF(GLTFData);
+    }
 }
 
 bool UComfyUI3DAssetManager::Save3DModelToProject(UStaticMesh* StaticMesh, const FString& AssetName, const FString& PackagePath)
@@ -469,4 +593,133 @@ FString UComfyUI3DAssetManager::GenerateUniqueAssetName(const FString& BaseName,
     }
     
     return TestName;
+}
+
+UStaticMesh* UComfyUI3DAssetManager::CreateFallbackMeshFromGLTF(const TArray<uint8>& GLTFData)
+{
+    UE_LOG(LogTemp, Log, TEXT("CreateFallbackMeshFromGLTF: Attempting basic glTF parsing"));
+
+    if (GLTFData.Num() == 0)
+        LOG_AND_RETURN(Error, nullptr, "CreateFallbackMeshFromGLTF: Empty glTF data");
+
+    // 检查是否为glTF二进制格式 (.glb)
+    if (GLTFData.Num() >= 4)
+    {
+        uint32 Magic = *reinterpret_cast<const uint32*>(GLTFData.GetData());
+        if (Magic == 0x46546C67) // "glTF" in little-endian
+        {
+            UE_LOG(LogTemp, Log, TEXT("CreateFallbackMeshFromGLTF: Detected GLB format"));
+            return ParseGLBData(GLTFData);
+        }
+    }
+
+    // 尝试解析为glTF JSON格式
+    FString GLTFContent = UTF8_TO_TCHAR(reinterpret_cast<const char*>(GLTFData.GetData()));
+    if (GLTFContent.Contains(TEXT("\"asset\"")) && GLTFContent.Contains(TEXT("\"version\"")))
+    {
+        UE_LOG(LogTemp, Log, TEXT("CreateFallbackMeshFromGLTF: Detected glTF JSON format"));
+        return ParseGLTFJson(GLTFContent);
+    }
+
+    UE_LOG(LogTemp, Error, TEXT("CreateFallbackMeshFromGLTF: Unrecognized glTF format"));
+    return nullptr;
+}
+
+UStaticMesh* UComfyUI3DAssetManager::ParseGLBData(const TArray<uint8>& GLBData)
+{
+    // GLB格式的基本结构：
+    // 12字节头部 + JSON块 + (可选)二进制块
+    if (GLBData.Num() < 12)
+        LOG_AND_RETURN(Error, nullptr, "ParseGLBData: GLB data too small");
+
+    const uint8* Data = GLBData.GetData();
+    
+    // 读取头部
+    uint32 Magic = *reinterpret_cast<const uint32*>(Data);
+    uint32 Version = *reinterpret_cast<const uint32*>(Data + 4);
+    uint32 Length = *reinterpret_cast<const uint32*>(Data + 8);
+
+    UE_LOG(LogTemp, Log, TEXT("ParseGLBData: Magic=0x%08X, Version=%d, Length=%d"), Magic, Version, Length);
+
+    if (Magic != 0x46546C67) // "glTF"
+        LOG_AND_RETURN(Error, nullptr, "ParseGLBData: Invalid GLB magic");
+
+    if (Version != 2)
+        LOG_AND_RETURN(Error, nullptr, "ParseGLBData: Unsupported GLB version: %d", Version);
+
+    if (Length > *reinterpret_cast<const uint32*>(GLBData.Num()))
+        LOG_AND_RETURN(Error, nullptr, "ParseGLBData: GLB length exceeds data size");
+
+    // 读取JSON块
+    if (GLBData.Num() < 20) // 12字节头部 + 8字节块头部
+        LOG_AND_RETURN(Error, nullptr, "ParseGLBData: Not enough data for JSON chunk");
+
+    uint32 JsonChunkLength = *reinterpret_cast<const uint32*>(Data + 12);
+    uint32 JsonChunkType = *reinterpret_cast<const uint32*>(Data + 16);
+
+    if (JsonChunkType != 0x4E4F534A) // "JSON"
+        LOG_AND_RETURN(Error, nullptr, "ParseGLBData: Expected JSON chunk");
+
+    if (12 + 8 + JsonChunkLength > *reinterpret_cast<const uint32*>(GLBData.Num()))
+        LOG_AND_RETURN(Error, nullptr, "ParseGLBData: JSON chunk exceeds data size");
+
+    // 提取JSON内容
+    FString JsonContent = UTF8_TO_TCHAR(reinterpret_cast<const char*>(Data + 20));
+    JsonContent = JsonContent.Left(JsonChunkLength);
+
+    UE_LOG(LogTemp, Log, TEXT("ParseGLBData: Extracted JSON chunk, size=%d"), JsonChunkLength);
+
+    // 解析JSON内容
+    return ParseGLTFJson(JsonContent);
+}
+
+UStaticMesh* UComfyUI3DAssetManager::ParseGLTFJson(const FString& JsonContent)
+{
+    UE_LOG(LogTemp, Log, TEXT("ParseGLTFJson: Parsing glTF JSON content"));
+
+    // 这是一个简化的glTF解析器，只处理基本的网格数据
+    // 实际的glTF格式非常复杂，包含场景图、动画、材质等
+    
+    TSharedPtr<FJsonObject> JsonObject;
+    TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(JsonContent);
+    
+    if (!FJsonSerializer::Deserialize(Reader, JsonObject) || !JsonObject.IsValid())
+        LOG_AND_RETURN(Error, nullptr, "ParseGLTFJson: Failed to parse JSON");
+
+    // 检查是否有网格数据
+    const TArray<TSharedPtr<FJsonValue>>* Meshes;
+    if (!JsonObject->TryGetArrayField(TEXT("meshes"), Meshes) || Meshes->Num() == 0)
+        LOG_AND_RETURN(Error, nullptr, "ParseGLTFJson: No meshes found in glTF");
+
+    // 获取第一个网格
+    TSharedPtr<FJsonObject> FirstMesh = (*Meshes)[0]->AsObject();
+    if (!FirstMesh.IsValid())
+        LOG_AND_RETURN(Error, nullptr, "ParseGLTFJson: Invalid mesh object");
+
+    // 简化处理：创建一个基本的立方体网格作为占位符
+    // 在实际实现中，这里应该解析顶点、索引和其他几何数据
+    TArray<FVector> Vertices = {
+        FVector(-50, -50, -50), FVector(50, -50, -50), FVector(50, 50, -50), FVector(-50, 50, -50),  // 底面
+        FVector(-50, -50, 50),  FVector(50, -50, 50),  FVector(50, 50, 50),  FVector(-50, 50, 50)    // 顶面
+    };
+
+    TArray<int32> Indices = {
+        0, 1, 2,  0, 2, 3,  // 底面
+        4, 7, 6,  4, 6, 5,  // 顶面
+        0, 4, 5,  0, 5, 1,  // 前面
+        2, 6, 7,  2, 7, 3,  // 后面
+        0, 3, 7,  0, 7, 4,  // 左面
+        1, 5, 6,  1, 6, 2   // 右面
+    };
+
+    TArray<FVector2D> UVs;
+    UVs.SetNum(Vertices.Num());
+    for (int32 i = 0; i < UVs.Num(); ++i)
+    {
+        UVs[i] = FVector2D(0.0f, 0.0f); // 简化的UV坐标
+    }
+
+    UE_LOG(LogTemp, Warning, TEXT("ParseGLTFJson: Using placeholder cube mesh (full glTF parsing not implemented)"));
+    
+    return CreateStaticMeshFromVertices(Vertices, Indices, UVs);
 }

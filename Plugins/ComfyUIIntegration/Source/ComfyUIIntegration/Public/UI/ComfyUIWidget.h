@@ -27,6 +27,9 @@ public:
 
     /** 构造Widget */
     void Construct(const FArguments& InArgs);
+    
+    /** 析构函数 - 清理资源 */
+    virtual ~SComfyUIWidget();
 
 private:
     /** 当前选择的工作流类型 */
@@ -56,6 +59,10 @@ private:
     
     /** 输入模型路径（用于纹理生成等工作流） */
     FString InputModelPath;
+
+    /** 当前活动的ComfyUI客户端（用于取消操作） */
+    UPROPERTY()
+    UComfyUIClient* CurrentClient;
 
     /** UI组件 */
     TSharedPtr<SMultiLineEditableTextBox> PromptTextBox;
@@ -91,9 +98,13 @@ private:
     TSharedPtr<SButton> LoadModelButton;
     TSharedPtr<SButton> ClearModelButton;
 
-    /** 生成的图像预览 */
+    /** 生成的内容预览 */
     TSharedPtr<class SImage> ImagePreview;
+    TSharedPtr<class SWidgetSwitcher> ContentSwitcher;
+    TSharedPtr<class SComfyUI3DPreviewViewport> ModelViewport;
+    TSharedPtr<class STextBlock> ModelPreviewWidget;
     UTexture2D* GeneratedTexture;
+    UStaticMesh* GeneratedMesh;
     
     /** 当前图像的Slate画刷，保持引用避免被释放 */
     TSharedPtr<FSlateBrush> CurrentImageBrush;
@@ -113,7 +124,6 @@ private:
     FReply OnCancelClicked();
     FReply OnSaveClicked();
     FReply OnSaveAsClicked();
-    FReply OnPreviewClicked();
     FReply OnImportWorkflowClicked();
     FReply OnRefreshWorkflowsClicked();
     FReply OnValidateWorkflowClicked();
@@ -170,11 +180,17 @@ private:
     /** 工作流类型转换 */
     FText WorkflowTypeToText(EComfyUIWorkflowType Type) const;
     
-    /** 图像生成回调 */
+    /** 内容生成回调 */
     void OnImageGenerationComplete(UTexture2D* GeneratedImage);
+    void OnMeshGenerationComplete(UStaticMesh* InGeneratedMesh);
     void OnGenerationProgressUpdate(const FComfyUIProgressInfo& ProgressInfo);
     void OnGenerationStarted(const FString& PromptId);
     void OnGenerationCompleted();
+    
+    /** 内容预览管理 */
+    void SwitchToImagePreview();
+    void SwitchToModelPreview();
+    void ClearContentPreview();
     
     /** 文件保存通知 */
     void ShowSaveSuccessNotification(const FString& AssetPath);

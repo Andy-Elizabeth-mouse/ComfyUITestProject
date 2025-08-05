@@ -75,7 +75,6 @@ void UComfyUINodeAnalyzer::InitializeNodeTypeMappings()
     // HunyuanI3D特定文本参数
     TextInputParameters.Add(TEXT("output_mesh_name"));
     TextInputParameters.Add(TEXT("model_file"));
-    TextInputParameters.Add(TEXT("image"));
 
     // 图像参数
     ImageInputParameters.Add(TEXT("image"));

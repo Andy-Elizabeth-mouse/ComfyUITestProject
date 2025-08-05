@@ -1,5 +1,3 @@
-<!-- Use this file to provide workspace-specific custom instructions to Copilot. For more details, visit https://code.visualstudio.com/docs/copilot/copilot-customization#_use-a-githubcopilotinstructionsmd-file -->
-
 # ComfyUI Integration Plugin for Unreal Engine 5
 
 这是一个Unreal Engine 5编辑器插件项目，用于集成ComfyUI工作流功能。
@@ -68,6 +66,7 @@
 E:\ue\UE_5.5\Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.exe -projectfiles -project="C:\UnrealProjects\ComfyUITestProject\ComfyUITestProject.uproject" -game -rocket -progress -engine -VSCode
 ```
 
+请**务必阅读所有需要/可能需要用到的api的头文件**。如果你发现自己使用了项目中的代码，请及时阅读相关的头文件和实现文件，以确保你了解其功能和用法。
 请在进行每一步（编辑、编译、测试等）时，**特别是在执行编译操作前**，在命令行运行`python get_feedback.py`获取我发送的反馈。
 **务必在执行编译操作前**运行此脚本，以确保你获得最新的反馈和指导。
 如果有任何问题或需要澄清的地方，请随时通过`get_feedback.py`脚本与我沟通。

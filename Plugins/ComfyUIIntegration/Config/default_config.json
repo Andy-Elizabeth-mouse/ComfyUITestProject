@@ -113,7 +113,7 @@
         }
     ],
     "server_settings": {
-        "default_url": "http://127.0.0.1:8188",
+        "default_url": "http://192.168.2.169:8188",
         "timeout": 300,
         "max_retries": 3,
         "poll_interval": 2.0

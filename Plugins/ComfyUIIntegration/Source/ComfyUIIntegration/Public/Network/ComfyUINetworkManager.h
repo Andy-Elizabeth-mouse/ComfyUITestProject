@@ -27,6 +27,12 @@ public:
     // 图片上传请求
     void UploadImage(const FString& ServerUrl, const TArray<uint8>& ImageData, const FString& FileName, TFunction<void(const FString& UploadedImageName, bool bSuccess)> Callback);
     
+    // 3D模型上传请求
+    void UploadModel(const FString& ServerUrl, const TArray<uint8>& ModelData, const FString& FileName, TFunction<void(const FString& UploadedModelName, bool bSuccess)> Callback);
+    
+    // 3D模型下载请求
+    void DownloadModel(const FString& Url, TFunction<void(const TArray<uint8>& ModelData, bool bSuccess)> Callback);
+    
     // 轮询状态请求
     void PollQueueStatus(const FString& ServerUrl, const FString& PromptId, TFunction<void(const FString& Response, bool bSuccess)> Callback);
     
@@ -38,7 +44,6 @@ public:
     
     // 重试机制
     bool ShouldRetryRequest(const FComfyUIError& Error, int32 CurrentRetryCount, int32 MaxRetryAttempts);
-    void ScheduleRetry(TWeakObjectPtr<UWorld> WorldContext, TFunction<void()> RetryFunction, float DelaySeconds);
     
     // 用户友好的错误消息
     FString GetUserFriendlyErrorMessage(const FComfyUIError& Error);

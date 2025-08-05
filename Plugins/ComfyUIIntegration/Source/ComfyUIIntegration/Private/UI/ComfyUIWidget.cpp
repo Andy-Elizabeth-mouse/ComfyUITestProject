@@ -1,5 +1,6 @@
 #include "UI/ComfyUIWidget.h"
 #include "UI/SImageDragDropWidget.h"
+#include "UI/ComfyUI3DPreviewViewport.h"
 #include "Client/ComfyUIClient.h"
 #include "Workflow/ComfyUIWorkflowConfig.h"
 #include "Workflow/ComfyUIWorkflowService.h"
@@ -17,6 +18,17 @@
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
+#include "Widgets/Layout/SWidgetSwitcher.h"
+#include "SEditorViewport.h"
+#include "EditorViewportClient.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMesh.h"
+#include "Engine/World.h"
+#include "Engine/Engine.h"
+#include "UnrealEngine.h"
+#include "Misc/EngineVersionComparison.h"
+#include "LevelEditor.h"
+#include "Modules/ModuleManager.h"
 #include "Styling/AppStyle.h"
 #include "Styling/CoreStyle.h"
 #include "Framework/Notifications/NotificationManager.h"
@@ -45,6 +57,30 @@
 #include "FileHelpers.h"
 
 #define LOCTEXT_NAMESPACE "ComfyUIWidget"
+
+SComfyUIWidget::~SComfyUIWidget()
+{
+    // 取消正在进行的生成
+    if (CurrentClient)
+    {
+        CurrentClient->CancelCurrentGeneration();
+    }
+    
+    // 清理3D预览视口
+    if (ModelViewport.IsValid())
+    {
+        ModelViewport->ClearPreview();
+    }
+    
+    // 清理生成的内容引用
+    GeneratedTexture = nullptr;
+    GeneratedMesh = nullptr;
+    
+    // 清理当前图像画刷
+    CurrentImageBrush.Reset();
+    
+    UE_LOG(LogTemp, Log, TEXT("SComfyUIWidget destroyed"));
+}
 
 void SComfyUIWidget::Construct(const FArguments& InArgs)
 {
@@ -195,7 +231,7 @@ TSharedRef<SWidget> SComfyUIWidget::CreateServerConfigWidget()
             .FillWidth(1.0f)
             [
                 SAssignNew(ComfyUIServerUrlTextBox, SEditableTextBox)
-                .Text(FText::FromString(TEXT("http://127.0.0.1:8188")))
+                .Text(FText::FromString(TEXT("http://192.168.2.169:8188")))
                 .HintText(LOCTEXT("ServerUrlHint", "请输入ComfyUI服务器URL"))
             ]
         ]
@@ -458,18 +494,6 @@ TSharedRef<SWidget> SComfyUIWidget::CreateControlButtonsWidget()
                 .IsEnabled(false) // 初始状态禁用
                 .ToolTipText(LOCTEXT("SaveAsTooltip", "将图片另存为指定位置"))
             ]
-
-            + SHorizontalBox::Slot()
-            .FillWidth(1.0f)
-            .Padding(2.0f)
-            [
-                SAssignNew(PreviewButton, SButton)
-                .Text(LOCTEXT("PreviewButton", "预览"))
-                .OnClicked(this, &SComfyUIWidget::OnPreviewClicked)
-                .HAlign(HAlign_Center)
-                .IsEnabled(false) // 初始状态禁用
-                .ToolTipText(LOCTEXT("PreviewTooltip", "预览生成的图片"))
-            ]
         ];
 }
 
@@ -601,7 +625,7 @@ TSharedRef<SWidget> SComfyUIWidget::CreateImagePreviewWidget()
         .Padding(0.0f, 2.0f)
         [
             SNew(STextBlock)
-            .Text(LOCTEXT("ImagePreviewLabel", "生成图像预览"))
+            .Text(LOCTEXT("ContentPreviewLabel", "生成内容预览"))
             .Font(FCoreStyle::GetDefaultFontStyle("Bold", 12))
         ]
 
@@ -613,15 +637,52 @@ TSharedRef<SWidget> SComfyUIWidget::CreateImagePreviewWidget()
             .BorderImage(FAppStyle::GetBrush("ToolPanel.GroupBorder"))
             .Padding(5.0f)
             [
-                // 使用固定高度的SBox来限制图片预览区域的大小
+                // 使用固定高度的SBox来限制预览区域的大小
                 SNew(SBox)
                 .HeightOverride(300.0f) // 设置预览区域的固定高度
                 .HAlign(HAlign_Center)
                 .VAlign(VAlign_Center)
                 [
-                    SAssignNew(ImagePreview, SImage)
-                    .Image(FAppStyle::GetBrush("WhiteBrush"))
-                    .ColorAndOpacity(FLinearColor::White)
+                    // 使用SWidgetSwitcher来在图像和3D模型预览之间切换
+                    SAssignNew(ContentSwitcher, SWidgetSwitcher)
+                    .WidgetIndex(0) // 默认显示图像预览
+                    
+                    // 索引0：图像预览
+                    + SWidgetSwitcher::Slot()
+                    [
+                        SAssignNew(ImagePreview, SImage)
+                        .Image(FAppStyle::GetBrush("WhiteBrush"))
+                        .ColorAndOpacity(FLinearColor::White)
+                    ]
+                    
+                    // 索引1：3D模型预览（使用自定义3D视口）
+                    + SWidgetSwitcher::Slot()
+                    [
+                        SNew(SBorder)
+                        .BorderImage(FAppStyle::GetBrush("ToolPanel.DarkGroupBorder"))
+                        .Padding(2.0f)
+                        [
+                            SNew(SBox)
+                            .WidthOverride(280.0f)
+                            .HeightOverride(280.0f)
+                            .HAlign(HAlign_Center)
+                            .VAlign(VAlign_Center)
+                            [
+                                // 创建3D模型预览视口
+                                SAssignNew(ModelViewport, SComfyUI3DPreviewViewport)
+                            ]
+                        ]
+                    ]
+                    
+                    // 索引2：空状态
+                    + SWidgetSwitcher::Slot()
+                    [
+                        SNew(STextBlock)
+                        .Text(LOCTEXT("NoContentGenerated", "暂无生成内容"))
+                        .Justification(ETextJustify::Center)
+                        .Font(FCoreStyle::GetDefaultFontStyle("Regular", 12))
+                        .ColorAndOpacity(FLinearColor(0.5f, 0.5f, 0.5f))
+                    ]
                 ]
             ]
         ];
@@ -650,7 +711,7 @@ FText SComfyUIWidget::GetGenerateButtonText() const
 {
     if (bIsGenerating)
         return LOCTEXT("GeneratingButton", "生成中...");
-    return LOCTEXT("GenerateButton", "生成图像");
+    return LOCTEXT("GenerateButton", "开始生成");
 }
 
 FText SComfyUIWidget::WorkflowTypeToText(EComfyUIWorkflowType Type) const
@@ -749,20 +810,14 @@ FReply SComfyUIWidget::OnGenerateClicked()
     GenerateButton->SetEnabled(false);
     bIsGenerating = true;
 
-    // 创建ComfyUI客户端进行连接测试
-    UComfyUIClient* Client = NewObject<UComfyUIClient>(GetTransientPackage(), UComfyUIClient::StaticClass());
-    if (Client)
+    // 获取ComfyUI客户端单例实例
+    CurrentClient = UComfyUIClient::GetInstance();
+    if (CurrentClient)
     {
-        Client->SetServerUrl(ServerUrl);
-        
-        // 设置世界上下文
-        if (GEngine && GEngine->GetCurrentPlayWorld())
-            Client->SetWorldContext(GEngine->GetCurrentPlayWorld());
-        else if (GWorld)
-            Client->SetWorldContext(GWorld);
+        CurrentClient->SetServerUrl(ServerUrl);
         
         // 先测试连接
-        Client->TestServerConnection(FOnConnectionTested::CreateLambda([this, TypeToCheck, Client, Prompt, NegativePrompt](bool bSuccess, FString ErrorMessage)
+        CurrentClient->TestServerConnection(FOnConnectionTested::CreateLambda([this, TypeToCheck, Prompt, NegativePrompt](bool bSuccess, FString ErrorMessage)
         {
             if (bSuccess)
             {
@@ -772,10 +827,10 @@ FReply SComfyUIWidget::OnGenerateClicked()
                     NegativePrompt,
                     InputImage,
                     InputModelPath,
-                    Client,
+                    CurrentClient,
                     // 回调委托，按正确顺序
                     FOnImageGenerated::CreateSP(this, &SComfyUIWidget::OnImageGenerationComplete),
-                    FOnMeshGenerated(),  // 暂时为空，稍后添加3D模型支持
+                    FOnMeshGenerated::CreateSP(this, &SComfyUIWidget::OnMeshGenerationComplete),
                     FOnGenerationProgress::CreateSP(this, &SComfyUIWidget::OnGenerationProgressUpdate),
                     FOnGenerationStarted::CreateSP(this, &SComfyUIWidget::OnGenerationStarted),
                     FOnGenerationFailed(),  // 暂时为空，稍后添加失败处理
@@ -787,6 +842,7 @@ FReply SComfyUIWidget::OnGenerateClicked()
                 // 连接失败，显示错误并恢复按钮状态
                 GenerateButton->SetEnabled(true);
                 bIsGenerating = false;
+                // 注意：CurrentClient 是单例，不需要设置为 nullptr
                 
                 FNotificationInfo Info(FText::Format(
                     LOCTEXT("ConnectionFailed", "无法连接到ComfyUI服务器：{0}\n\n请检查：\n• 服务器是否正在运行\n• 网络连接是否正常\n• 服务器地址是否正确\n• 防火墙设置"),
@@ -804,68 +860,100 @@ FReply SComfyUIWidget::OnGenerateClicked()
 #pragma optimize("", on)
 FReply SComfyUIWidget::OnSaveClicked()
 {
-    if (!GeneratedTexture)
-    {
-        FMessageDialog::Open(EAppMsgType::Ok,
-            LOCTEXT("NoTextureError", "没有可保存的图像。请先生成图像。"));
-        return FReply::Handled();
-    }
-
     // 生成默认文件名（基于时间戳）
     FString DefaultName = FString::Printf(TEXT("ComfyUI_Generated_%s"),
         *FDateTime::Now().ToString(TEXT("%Y%m%d_%H%M%S")));
 
-    // 保存纹理到项目的默认路径
-    if (UComfyUIFileManager::SaveTextureToProject(GeneratedTexture, DefaultName))
-        ShowSaveSuccessNotification(FString::Printf(TEXT("/Game/ComfyUI/Generated/%s"), *DefaultName));
+    if (GeneratedTexture)
+    {
+        // 保存纹理到项目的默认路径
+        if (UComfyUIFileManager::SaveTextureToProject(GeneratedTexture, DefaultName))
+            ShowSaveSuccessNotification(FString::Printf(TEXT("/Game/ComfyUI/Generated/%s"), *DefaultName));
+        else
+            ShowSaveErrorNotification(TEXT("保存图像时发生错误"));
+    }
+    else if (GeneratedMesh)
+    {
+        // 保存3D模型到项目的默认路径
+        // TODO: 实现3D模型保存功能
+        FNotificationInfo Info(LOCTEXT("MeshSaveNotImplemented", "3D模型保存功能正在开发中"));
+        Info.ExpireDuration = 3.0f;
+        Info.Image = FAppStyle::GetBrush(TEXT("NotificationList.DefaultMessage"));
+        FSlateNotificationManager::Get().AddNotification(Info);
+    }
     else
-        ShowSaveErrorNotification(TEXT("保存图像时发生错误"));
+    {
+        FMessageDialog::Open(EAppMsgType::Ok,
+            LOCTEXT("NoContentError", "没有可保存的内容。请先生成图像或3D模型。"));
+    }
     
     return FReply::Handled();
 }
 
 FReply SComfyUIWidget::OnSaveAsClicked()
 {
-    if (!GeneratedTexture)
+    UE_LOG(LogTemp, Log, TEXT("OnSaveAsClicked: Starting save dialog"));
+
+    // 检查是否有生成的内容
+    bool bHasImage = GeneratedTexture != nullptr;
+    bool bHasMesh = GeneratedMesh != nullptr;
+    
+    if (!bHasImage && !bHasMesh)
     {
-        FMessageDialog::Open(EAppMsgType::Ok,
-            LOCTEXT("NoTextureError", "没有可保存的图像。请先生成图像。"));
+        UE_LOG(LogTemp, Warning, TEXT("OnSaveAsClicked: No generated content to save"));
+        ShowSaveErrorNotification(TEXT("没有生成的内容可以保存"));
         return FReply::Handled();
     }
 
-    // 打开文件对话框让用户选择保存路径和名称
-    FString DefaultFilename = FString::Printf(TEXT("ComfyUI_Generated_%s.png"),
-        *FDateTime::Now().ToString(TEXT("%Y%m%d_%H%M%S")));
-    
     FString SavePath;
-    // 显示保存对话框 - 保存到任意位置
+    FString DefaultFilename;
+    FString FileExtensions;
+    FString DialogTitle;
+
+    // 根据内容类型设置对话框参数
+    if (bHasImage)
+    {
+        DefaultFilename = FString::Printf(TEXT("ComfyUI_Generated_%s.png"),
+            *FDateTime::Now().ToString(TEXT("%Y%m%d_%H%M%S")));
+        FileExtensions = TEXT("PNG Files (*.png)|*.png|JPEG Files (*.jpg)|*.jpg|BMP Files (*.bmp)|*.bmp");
+        DialogTitle = TEXT("保存生成的图像");
+    }
+    else if (bHasMesh)
+    {
+        DefaultFilename = FString::Printf(TEXT("ComfyUI_Generated_%s.obj"),
+            *FDateTime::Now().ToString(TEXT("%Y%m%d_%H%M%S")));
+        FileExtensions = TEXT("OBJ Files (*.obj)|*.obj|GLB Files (*.glb)|*.glb|GLTF Files (*.gltf)|*.gltf");
+        DialogTitle = TEXT("保存生成的3D模型");
+    }
+
+    // 显示保存对话框
     if (UComfyUIFileManager::ShowSaveFileDialog(
-        TEXT("保存生成的图像"),
-        TEXT("PNG Files (*.png)|*.png|JPEG Files (*.jpg)|*.jpg|BMP Files (*.bmp)|*.bmp"),
+        DialogTitle,
+        FileExtensions,
         UComfyUIFileManager::GetPluginDirectory(),
         DefaultFilename,
         SavePath))
     {
         UE_LOG(LogTemp, Log, TEXT("OnSaveAsClicked: User selected save path: %s"), *SavePath);
 
-        // 直接保存为图像文件，而不是UE资产
-        if (UComfyUIFileManager::SaveTextureToFile(GeneratedTexture, SavePath))
-            ShowSaveSuccessNotification(FString::Printf(TEXT("文件已保存到: %s"), *SavePath));
-        else
-            ShowSaveErrorNotification(TEXT("保存图像文件时发生错误"));
+        if (bHasImage)
+        {
+            // 保存图像文件
+            if (UComfyUIFileManager::SaveTextureToFile(GeneratedTexture, SavePath))
+                ShowSaveSuccessNotification(FString::Printf(TEXT("文件已保存到: %s"), *SavePath));
+            else
+                ShowSaveErrorNotification(TEXT("保存图像文件时发生错误"));
+        }
+        else if (bHasMesh)
+        {
+            // TODO: 实现3D模型保存功能
+            ShowSaveErrorNotification(TEXT("3D模型保存功能暂未实现"));
+        }
     }
     else
+    {
         UE_LOG(LogTemp, Log, TEXT("OnSaveAsClicked: User cancelled save dialog"));
-    
-    return FReply::Handled();
-}
-
-FReply SComfyUIWidget::OnPreviewClicked()
-{
-    // TODO: 实现预览功能
-    FNotificationInfo Info(LOCTEXT("PreviewNotImplemented", "预览功能暂未实现"));
-    Info.ExpireDuration = 3.0f;
-    FSlateNotificationManager::Get().AddNotification(Info);
+    }
     
     return FReply::Handled();
 }
@@ -1051,6 +1139,7 @@ void SComfyUIWidget::OnImageGenerationComplete(UTexture2D* GeneratedImage)
     // 重新启用生成按钮并恢复生成状态
     GenerateButton->SetEnabled(true);
     bIsGenerating = false;
+    CurrentClient = nullptr;  // 清除客户端引用
 
     if (GeneratedImage)
     {
@@ -1073,11 +1162,13 @@ void SComfyUIWidget::OnImageGenerationComplete(UTexture2D* GeneratedImage)
         
         // 更新图像预览
         ImagePreview->SetImage(CurrentImageBrush.Get());
+        
+        // 切换到图像预览模式
+        SwitchToImagePreview();
 
-        // 启用保存和预览按钮
+        // 启用保存按钮（移除预览按钮，因为内容直接显示在预览区域）
         SaveButton->SetEnabled(true);
         SaveAsButton->SetEnabled(true);
-        PreviewButton->SetEnabled(true);
 
         // 显示成功通知
         FNotificationInfo Info(LOCTEXT("GenerationComplete", "图像生成完成！"));
@@ -1092,6 +1183,82 @@ void SComfyUIWidget::OnImageGenerationComplete(UTexture2D* GeneratedImage)
         Info.ExpireDuration = 5.0f;
         Info.Image = FAppStyle::GetBrush(TEXT("NotificationList.DefaultMessage"));
         FSlateNotificationManager::Get().AddNotification(Info);
+    }
+}
+
+void SComfyUIWidget::OnMeshGenerationComplete(UStaticMesh* InGeneratedMesh)
+{
+    // 重新启用生成按钮并恢复生成状态
+    GenerateButton->SetEnabled(true);
+    bIsGenerating = false;
+    CurrentClient = nullptr;  // 清除客户端引用
+
+    if (InGeneratedMesh)
+    {
+        this->GeneratedMesh = InGeneratedMesh;
+        
+        // 在3D视口中显示生成的模型
+        if (ModelViewport.IsValid())
+        {
+            ModelViewport->SetPreviewMesh(InGeneratedMesh);
+            UE_LOG(LogTemp, Log, TEXT("OnMeshGenerationComplete: Set mesh in viewport"));
+        }
+        
+        // 切换到3D模型预览模式
+        SwitchToModelPreview();
+
+        // 启用保存按钮
+        SaveButton->SetEnabled(true);
+        SaveAsButton->SetEnabled(true);
+
+        // 显示成功通知
+        FNotificationInfo Info(LOCTEXT("MeshGenerationComplete", "3D模型生成完成！"));
+        Info.ExpireDuration = 3.0f;
+        Info.Image = FAppStyle::GetBrush(TEXT("NotificationList.SuccessImage"));
+        FSlateNotificationManager::Get().AddNotification(Info);
+    }
+    else
+    {
+        // 显示3D模型生成错误通知
+        FNotificationInfo Info(LOCTEXT("MeshGenerationFailed", "3D模型生成失败，请检查工作流配置或服务器资源"));
+        Info.ExpireDuration = 5.0f;
+        Info.Image = FAppStyle::GetBrush(TEXT("NotificationList.DefaultMessage"));
+        FSlateNotificationManager::Get().AddNotification(Info);
+    }
+}
+
+void SComfyUIWidget::SwitchToImagePreview()
+{
+    if (ContentSwitcher.IsValid())
+    {
+        ContentSwitcher->SetActiveWidgetIndex(0); // 切换到图像预览
+    }
+}
+
+void SComfyUIWidget::SwitchToModelPreview()
+{
+    if (ContentSwitcher.IsValid())
+    {
+        ContentSwitcher->SetActiveWidgetIndex(1); // 切换到3D模型预览
+    }
+}
+
+void SComfyUIWidget::ClearContentPreview()
+{
+    // 清除生成的内容
+    GeneratedTexture = nullptr;
+    GeneratedMesh = nullptr;
+    
+    // 清除3D视口中的预览
+    if (ModelViewport.IsValid())
+    {
+        ModelViewport->ClearPreview();
+    }
+    
+    // 切换到空状态
+    if (ContentSwitcher.IsValid())
+    {
+        ContentSwitcher->SetActiveWidgetIndex(2); // 切换到空状态
     }
 }
 
@@ -1204,18 +1371,13 @@ void SComfyUIWidget::RefreshCustomWorkflowList()
 {
     CustomWorkflowNames.Empty();
     
-    // 使用工作流服务扫描工作流模板
     UComfyUIWorkflowService* WorkflowService = UComfyUIWorkflowService::Get();
     TArray<FString> WorkflowNames;
     
-    if (WorkflowService)
+    if (WorkflowService && IsValid(WorkflowService))
     {
         WorkflowNames = WorkflowService->GetAvailableWorkflowNames();
-    }
-    else
-    {
-        // 如果服务不可用，回退到直接扫描文件
-        WorkflowNames = UComfyUIFileManager::ScanWorkflowTemplates();
+        UE_LOG(LogTemp, Log, TEXT("RefreshCustomWorkflowList: Got %d workflows from service"), WorkflowNames.Num());
     }
     
     for (const FString& WorkflowName : WorkflowNames)
@@ -1462,9 +1624,6 @@ void SComfyUIWidget::DetectWorkflowType(const FString& WorkflowName)
     
     // 使用工作流管理器检测工作流类型
     DetectedCustomWorkflowType = UComfyUIWorkflowService::Get()->DetectWorkflowType(WorkflowName);
-        
-    UE_LOG(LogTemp, Log, TEXT("DetectWorkflowType: Detected workflow type for '%s': %d"), 
-           *WorkflowName, (int32)DetectedCustomWorkflowType);
 }
 
 bool SComfyUIWidget::DoesCurrentWorkflowNeedImage() const
@@ -1602,19 +1761,27 @@ FText SComfyUIWidget::GetCurrentNodeText() const
 
 FReply SComfyUIWidget::OnCancelClicked()
 {
-    if (bIsGenerating)
+    if (bIsGenerating && CurrentClient && IsValid(CurrentClient))
     {
-        // 获取ComfyUI客户端
-        if (UComfyUIClient* Client = NewObject<UComfyUIClient>())
-        {
-            Client->CancelCurrentGeneration();
-            
-            // 重置UI状态
-            bIsGenerating = false;
-            CurrentProgressInfo = FComfyUIProgressInfo();
-            
-            UE_LOG(LogTemp, Log, TEXT("Generation cancelled by user"));
-        }
+        // 取消当前生成任务
+        CurrentClient->CancelCurrentGeneration();
+        
+        // 重置UI状态
+        bIsGenerating = false;
+        CurrentProgressInfo = FComfyUIProgressInfo();
+        
+        // 恢复生成按钮状态
+        GenerateButton->SetEnabled(true);
+        
+        // 清除客户端引用
+        CurrentClient = nullptr;
+        
+        // 显示取消通知
+        FNotificationInfo Info(LOCTEXT("GenerationCancelled", "生成任务已取消"));
+        Info.ExpireDuration = 3.0f;
+        FSlateNotificationManager::Get().AddNotification(Info);
+        
+        UE_LOG(LogTemp, Log, TEXT("Generation cancelled by user"));
     }
     
     return FReply::Handled();
@@ -1638,6 +1805,7 @@ void SComfyUIWidget::OnGenerationCompleted()
 {
     bIsGenerating = false;
     CurrentProgressInfo = FComfyUIProgressInfo();
+    CurrentClient = nullptr;  // 清除客户端引用，生成完成后不再需要
     UE_LOG(LogTemp, Log, TEXT("Generation completed"));
 }
 
