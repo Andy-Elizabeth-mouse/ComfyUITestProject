@@ -24,22 +24,6 @@ void UComfyUIWorkflowManager::LoadWorkflowConfigs()
     // 清空现有配置
     CustomWorkflowConfigs.Empty();
     
-    // 从配置文件加载
-    FString ConfigPath = UComfyUIFileManager::GetConfigDirectory() / TEXT("default_config.json");
-    
-    if (FPaths::FileExists(ConfigPath))
-    {
-        FString ConfigContent;
-        if (UComfyUIFileManager::LoadJsonFromFile(ConfigPath, ConfigContent))
-        {
-            TSharedPtr<FJsonObject> ConfigJson;
-            if (UComfyUIFileManager::ParseJsonString(ConfigContent, ConfigJson))
-            {
-                LoadWorkflowsFromConfigJson(ConfigJson);
-            }
-        }
-    }
-    
     // 从模板目录加载
     LoadTemplateDirectoryWorkflows();
     
@@ -109,22 +93,9 @@ TArray<FString> UComfyUIWorkflowManager::GetAvailableWorkflowNames() const
     TArray<FString> WorkflowNames;
     
     for (const FWorkflowConfig& Config : CustomWorkflowConfigs)
-    {
         WorkflowNames.Add(Config.Name);
-    }
     
     return WorkflowNames;
-}
-
-bool UComfyUIWorkflowManager::FindWorkflowConfig(const FString& WorkflowName, FWorkflowConfig& OutConfig) const
-{
-    const FWorkflowConfig* FoundConfig = FindWorkflowConfigInternal(WorkflowName);
-    if (FoundConfig)
-    {
-        OutConfig = *FoundConfig;
-        return true;
-    }
-    return false;
 }
 
 // ========== 工作流验证 ==========
@@ -290,35 +261,6 @@ bool UComfyUIWorkflowManager::ImportWorkflowFile(const FString& FilePath, const 
     return true;
 }
 
-bool UComfyUIWorkflowManager::ExportWorkflowConfig(const FWorkflowConfig& Config, const FString& FilePath, FString& OutError)
-{
-    OutError.Empty();
-    
-    if (Config.JsonTemplate.IsEmpty())
-    {
-        OutError = TEXT("Workflow configuration has no template content");
-        return false;
-    }
-    
-    // 确保目录存在
-    FString FileDirectory = FPaths::GetPath(FilePath);
-    if (!UComfyUIFileManager::EnsureDirectoryExists(FileDirectory))
-    {
-        OutError = FString::Printf(TEXT("Failed to create directory: %s"), *FileDirectory);
-        return false;
-    }
-    
-    // 保存工作流内容到文件
-    if (!UComfyUIFileManager::SaveJsonToFile(Config.JsonTemplate, FilePath))
-    {
-        OutError = FString::Printf(TEXT("Failed to save workflow to file: %s"), *FilePath);
-        return false;
-    }
-    
-    UE_LOG(LogTemp, Log, TEXT("ExportWorkflowConfig: Successfully exported workflow %s to %s"), *Config.Name, *FilePath);
-    return true;
-}
-
 // ========== 工作流JSON构建 ==========
 #pragma optimize("", off)
 FString UComfyUIWorkflowManager::BuildWorkflowJson(const FString& CustomWorkflowName)
@@ -403,22 +345,6 @@ FString UComfyUIWorkflowManager::ReplaceWorkflowPlaceholders(const FString& Work
 
 // ========== 工作流参数管理 ==========
 
-TArray<FString> UComfyUIWorkflowManager::GetWorkflowParameterNames(const FString& WorkflowName) const
-{
-    TArray<FString> ParameterNames;
-    
-    const FWorkflowConfig* FoundConfig = FindWorkflowConfigInternal(WorkflowName);
-    if (FoundConfig)
-    {
-        for (const auto& Param : FoundConfig->Parameters)
-        {
-            ParameterNames.Add(Param.Key);
-        }
-    }
-    
-    return ParameterNames;
-}
-
 bool UComfyUIWorkflowManager::SetWorkflowParameter(const FString& WorkflowName, const FString& ParameterName, const FString& Value)
 {
     FWorkflowConfig* FoundConfig = FindWorkflowConfigInternal(WorkflowName);
@@ -453,13 +379,6 @@ void UComfyUIWorkflowManager::ClearWorkflowConfigs()
 {
     CustomWorkflowConfigs.Empty();
     UE_LOG(LogTemp, Log, TEXT("UComfyUIWorkflowManager: Cleared all workflow configurations"));
-}
-
-void UComfyUIWorkflowManager::RefreshWorkflowConfigs()
-{
-    UE_LOG(LogTemp, Log, TEXT("UComfyUIWorkflowManager: Refreshing workflow configurations"));
-    ClearWorkflowConfigs();
-    LoadWorkflowConfigs();
 }
 
 // ========== 私有函数 ==========
@@ -622,63 +541,6 @@ const FWorkflowConfig* UComfyUIWorkflowManager::FindWorkflowConfigInternal(const
     return nullptr;
 }
 
-void UComfyUIWorkflowManager::LoadWorkflowsFromConfigJson(TSharedPtr<FJsonObject> ConfigJson)
-{
-    if (!ConfigJson.IsValid() || !ConfigJson->HasField(TEXT("workflows")))
-    {
-        return;
-    }
-    
-    const TArray<TSharedPtr<FJsonValue>>* WorkflowArray;
-    if (ConfigJson->TryGetArrayField(TEXT("workflows"), WorkflowArray))
-    {
-        for (const auto& WorkflowValue : *WorkflowArray)
-        {
-            TSharedPtr<FJsonObject> WorkflowObj = WorkflowValue->AsObject();
-            if (WorkflowObj.IsValid())
-            {
-                FWorkflowConfig CustomConfig;
-                CustomConfig.Name = WorkflowObj->GetStringField(TEXT("name"));
-                CustomConfig.Type = WorkflowObj->GetStringField(TEXT("type"));
-                CustomConfig.Description = WorkflowObj->GetStringField(TEXT("description"));
-                
-                // 读取模板文件路径
-                if (WorkflowObj->HasField(TEXT("template")))
-                {
-                    CustomConfig.TemplateFile = WorkflowObj->GetStringField(TEXT("template"));
-                }
-                
-                // 读取参数
-                if (WorkflowObj->HasField(TEXT("parameters")))
-                {
-                    TSharedPtr<FJsonObject> ParamsObj = WorkflowObj->GetObjectField(TEXT("parameters"));
-                    for (auto& Param : ParamsObj->Values)
-                    {
-                        FString ValueStr;
-                        if (Param.Value->TryGetString(ValueStr))
-                        {
-                            CustomConfig.Parameters.Add(Param.Key, ValueStr);
-                        }
-                        else if (Param.Value->Type == EJson::Number)
-                        {
-                            double NumValue = Param.Value->AsNumber();
-                            CustomConfig.Parameters.Add(Param.Key, FString::SanitizeFloat(NumValue));
-                        }
-                        else if (Param.Value->Type == EJson::Boolean)
-                        {
-                            bool BoolValue = Param.Value->AsBool();
-                            CustomConfig.Parameters.Add(Param.Key, BoolValue ? TEXT("true") : TEXT("false"));
-                        }
-                    }
-                }
-                
-                CustomWorkflowConfigs.Add(CustomConfig);
-                UE_LOG(LogTemp, Log, TEXT("LoadWorkflowsFromConfigJson: Loaded workflow from config: %s"), *CustomConfig.Name);
-            }
-        }
-    }
-}
-
 // ========== 工作流类型检测 ==========
 
 EComfyUIWorkflowType UComfyUIWorkflowManager::DetectWorkflowType(const FString& WorkflowName)
@@ -775,47 +637,4 @@ EComfyUIWorkflowType UComfyUIWorkflowManager::AnalyzEComfyUIWorkflowTypeFromConf
     }
     
     return DetectedType;
-}
-
-bool UComfyUIWorkflowManager::UpdateWorkflowInputOutputInfo(const FString& WorkflowName)
-{
-    FWorkflowConfig* Config = FindWorkflowConfigInternal(WorkflowName);
-    if (!Config)
-    {
-        UE_LOG(LogTemp, Warning, TEXT("UpdateWorkflowInputOutputInfo: Workflow config not found: %s"), *WorkflowName);
-        return false;
-    }
-    
-    // 使用节点分析器来分析工作流
-    UComfyUINodeAnalyzer* NodeAnalyzer = NewObject<UComfyUINodeAnalyzer>();
-    
-    // 解析工作流JSON
-    TSharedPtr<FJsonObject> WorkflowJson;
-    TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Config->JsonTemplate);
-    
-    if (!FJsonSerializer::Deserialize(Reader, WorkflowJson) || !WorkflowJson.IsValid())
-    {
-        UE_LOG(LogTemp, Error, TEXT("UpdateWorkflowInputOutputInfo: Failed to parse workflow JSON for: %s"), *WorkflowName);
-        return false;
-    }
-    
-    // 分析工作流输入输出
-    TArray<FWorkflowInputInfo> Inputs;
-    TArray<FWorkflowOutputInfo> Outputs;
-    
-    if (!NodeAnalyzer->AnalyzeWorkflow(WorkflowJson, Inputs, Outputs))
-    {
-        UE_LOG(LogTemp, Error, TEXT("UpdateWorkflowInputOutputInfo: Failed to analyze workflow: %s"), *WorkflowName);
-        return false;
-    }
-    
-    // 更新配置
-    Config->WorkflowInputs = Inputs;
-    Config->WorkflowOutputs = Outputs;
-    Config->DetectedType = NodeAnalyzer->DetermineWorkflowType(Inputs, Outputs);
-    
-    UE_LOG(LogTemp, Log, TEXT("UpdateWorkflowInputOutputInfo: Updated workflow '%s' - %d inputs, %d outputs, type: %d"), 
-           *WorkflowName, Inputs.Num(), Outputs.Num(), (int32)Config->DetectedType);
-    
-    return true;
 }

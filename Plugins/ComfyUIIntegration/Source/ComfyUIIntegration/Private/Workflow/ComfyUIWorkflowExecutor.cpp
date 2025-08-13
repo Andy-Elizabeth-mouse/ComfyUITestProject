@@ -132,7 +132,7 @@ void FComfyUIWorkflowExecutor::RunGeneration(
         }
     }
     
-    // 处理3D模型上传
+    // 处理3D模型上传到ComfyUI的input目录
     if (bNeedModelUpload)
     {
         TArray<uint8> ModelData;
@@ -146,16 +146,20 @@ void FComfyUIWorkflowExecutor::RunGeneration(
                     [OnUploadCompleted, UploadState, OnFailed](const FString& ModelName, bool bSuccess) mutable {
                         if (bSuccess && !ModelName.IsEmpty())
                         {
+                            // 使用上传后的文件名（相对于ComfyUI input目录的路径）
                             UploadState->SharedParams.Input.MeshParameters.Add(TEXT("INPUT_MESH"), ModelName);
-                            UE_LOG(LogTemp, Log, TEXT("Model uploaded successfully: %s"), *ModelName);
+                            UE_LOG(LogTemp, Log, TEXT("Model uploaded to ComfyUI input directory: %s"), *ModelName);
                         }
                         else
                         {
                             UploadState->bHasError = true;
-                            UploadState->ErrorMessage = TEXT("Failed to upload input model");
-                            UE_LOG(LogTemp, Warning, TEXT("Failed to upload input model"));
+                            UploadState->ErrorMessage = TEXT("Failed to upload model to ComfyUI server");
+                            UE_LOG(LogTemp, Warning, TEXT("Failed to upload model to ComfyUI server"));
                             
-                            FComfyUIError Error(EComfyUIErrorType::ServerError, TEXT("Failed to upload input model"), 0, TEXT(""), false);
+                            FComfyUIError Error(EComfyUIErrorType::ServerError, 
+                                              TEXT("无法上传3D模型到ComfyUI服务器"), 
+                                              0,
+                                              TEXT("请检查ComfyUI服务器状态和网络连接"), true);
                             OnFailed.ExecuteIfBound(Error, false);
                         }
                         
@@ -174,7 +178,10 @@ void FComfyUIWorkflowExecutor::RunGeneration(
         {
             UploadState->bHasError = true;
             UploadState->ErrorMessage = FString::Printf(TEXT("Failed to load model file: %s"), *InputModelPath);
-            FComfyUIError Error(EComfyUIErrorType::UnknownError, UploadState->ErrorMessage, 0, TEXT(""), false);
+            FComfyUIError Error(EComfyUIErrorType::UnknownError, 
+                              FString::Printf(TEXT("无法加载3D模型文件: %s"), *InputModelPath), 
+                              0,
+                              TEXT("请检查文件路径和权限"), false);
             OnFailed.ExecuteIfBound(Error, false);
         }
     }

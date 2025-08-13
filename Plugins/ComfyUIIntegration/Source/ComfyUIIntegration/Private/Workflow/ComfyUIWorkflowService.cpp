@@ -70,12 +70,12 @@ void UComfyUIWorkflowService::Shutdown()
     
     UE_LOG(LogTemp, Log, TEXT("UComfyUIWorkflowService: Shutting down workflow service"));
     
-    if (WorkflowManager)
-    {
-        WorkflowManager->ClearWorkflowConfigs();
-        WorkflowManager->RemoveFromRoot(); // 防止内存泄漏
-        WorkflowManager = nullptr;
-    }
+    // if (WorkflowManager)
+    // {
+    //     WorkflowManager->ClearWorkflowConfigs();
+    //     WorkflowManager->RemoveFromRoot(); // 防止内存泄漏
+    //     WorkflowManager = nullptr;
+    // }
     
     bInitialized = false;
 }
@@ -85,7 +85,7 @@ void UComfyUIWorkflowService::ShutdownGlobal()
     if (Instance)
     {
         Instance->Shutdown();
-        Instance->RemoveFromRoot();
+        // 让 GC 自然处理，不手动操作根引用
         Instance = nullptr;
         UE_LOG(LogTemp, Log, TEXT("UComfyUIWorkflowService: Global instance shutdown complete"));
     }
@@ -99,26 +99,6 @@ TArray<FString> UComfyUIWorkflowService::GetAvailableWorkflowNames() const
         LOG_AND_RETURN(Error, TArray<FString>(), "GetAvailableWorkflowNames: WorkflowManager is null");
     
     return WorkflowManager->GetAvailableWorkflowNames();
-}
-
-bool UComfyUIWorkflowService::GetWorkflowConfig(const FString& WorkflowName, FWorkflowConfig& OutConfig) const
-{
-    if (!WorkflowManager)
-        LOG_AND_RETURN(Error, false, "GetWorkflowConfig: WorkflowManager is null");
-    
-    return WorkflowManager->FindWorkflowConfig(WorkflowName, OutConfig);
-}
-
-void UComfyUIWorkflowService::RefreshWorkflows()
-{
-    if (!WorkflowManager)
-    {
-        UE_LOG(LogTemp, Error, TEXT("RefreshWorkflows: WorkflowManager is null"));
-        return;
-    }
-    
-    UE_LOG(LogTemp, Log, TEXT("UComfyUIWorkflowService: Refreshing workflows"));
-    WorkflowManager->RefreshWorkflowConfigs();
 }
 
 bool UComfyUIWorkflowService::ValidateWorkflow(const FString& FilePath, FString& OutError)
@@ -186,14 +166,6 @@ FString UComfyUIWorkflowService::BuildWorkflowJson(const FString& WorkflowName,
 
 // ========== 参数管理接口 ==========
 
-TArray<FString> UComfyUIWorkflowService::GetWorkflowParameters(const FString& WorkflowName) const
-{
-    if (!WorkflowManager)
-        LOG_AND_RETURN(Error, TArray<FString>(), "GetWorkflowParameters: WorkflowManager is null");
-    
-    return WorkflowManager->GetWorkflowParameterNames(WorkflowName);
-}
-
 bool UComfyUIWorkflowService::SetWorkflowParameter(const FString& WorkflowName, const FString& ParameterName, const FString& Value)
 {
     if (!WorkflowManager)
@@ -212,49 +184,10 @@ FString UComfyUIWorkflowService::GetWorkflowParameter(const FString& WorkflowNam
 
 // ========== 便捷接口 ==========
 
-bool UComfyUIWorkflowService::IsWorkflowValid(const FString& WorkflowName) const
-{
-    if (!WorkflowManager)
-        return false;
-    
-    FWorkflowConfig Config;
-    if (WorkflowManager->FindWorkflowConfig(WorkflowName, Config))
-    {
-        return Config.bIsValid;
-    }
-    
-    return false;
-}
-
-FString UComfyUIWorkflowService::GetWorkflowDescription(const FString& WorkflowName) const
-{
-    if (!WorkflowManager)
-        return FString();
-    
-    FWorkflowConfig Config;
-    if (WorkflowManager->FindWorkflowConfig(WorkflowName, Config))
-    {
-        return Config.Description;
-    }
-    
-    return FString();
-}
-
-FString UComfyUIWorkflowService::GetWorkflowType(const FString& WorkflowName) const
-{
-    if (!WorkflowManager)
-        return FString();
-    
-    FWorkflowConfig Config;
-    if (WorkflowManager->FindWorkflowConfig(WorkflowName, Config))
-    {
-        return Config.Type;
-    }
-    
-    return FString();
-}
-
 EComfyUIWorkflowType UComfyUIWorkflowService::DetectWorkflowType(const FString &WorkflowName)
 {
+    if (!WorkflowManager)
+        LOG_AND_RETURN(Error, EComfyUIWorkflowType::Unknown, "DetectWorkflowType: WorkflowManager is null");
+    
     return WorkflowManager->DetectWorkflowType(WorkflowName);
 }

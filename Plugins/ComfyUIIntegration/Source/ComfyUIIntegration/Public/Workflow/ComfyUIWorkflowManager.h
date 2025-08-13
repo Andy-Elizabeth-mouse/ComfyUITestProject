@@ -36,10 +36,6 @@ public:
     /** 获取所有可用工作流名称 */
     UFUNCTION(BlueprintCallable, Category = "ComfyUI|Workflow")
     TArray<FString> GetAvailableWorkflowNames() const;
-    
-    /** 根据名称查找工作流配置 */
-    UFUNCTION(BlueprintCallable, Category = "ComfyUI|Workflow")
-    bool FindWorkflowConfig(const FString& WorkflowName, FWorkflowConfig& OutConfig) const;
 
     // ========== 工作流验证 ==========
     
@@ -60,20 +56,12 @@ public:
     /** 从配置分析工作流类型 */
     UFUNCTION(BlueprintCallable, Category = "ComfyUI|Workflow")
     EComfyUIWorkflowType AnalyzEComfyUIWorkflowTypeFromConfig(const FWorkflowConfig& Config);
-    
-    /** 更新工作流的输入输出信息 */
-    UFUNCTION(BlueprintCallable, Category = "ComfyUI|Workflow")
-    bool UpdateWorkflowInputOutputInfo(const FString& WorkflowName);
 
     // ========== 工作流导入和导出 ==========
     
     /** 导入工作流文件 */
     UFUNCTION(BlueprintCallable, Category = "ComfyUI|Workflow")
     bool ImportWorkflowFile(const FString& FilePath, const FString& WorkflowName, FString& OutError);
-    
-    /** 导出工作流配置到文件 */
-    UFUNCTION(BlueprintCallable, Category = "ComfyUI|Workflow")
-    bool ExportWorkflowConfig(const FWorkflowConfig& Config, const FString& FilePath, FString& OutError);
 
     // ========== 工作流JSON构建 ==========
     
@@ -88,10 +76,6 @@ public:
 
     // ========== 工作流参数管理 ==========
     
-    /** 获取工作流参数名称列表 */
-    UFUNCTION(BlueprintCallable, Category = "ComfyUI|Workflow")
-    TArray<FString> GetWorkflowParameterNames(const FString& WorkflowName) const;
-    
     /** 设置工作流参数 */
     UFUNCTION(BlueprintCallable, Category = "ComfyUI|Workflow")
     bool SetWorkflowParameter(const FString& WorkflowName, const FString& ParameterName, const FString& Value);
@@ -105,10 +89,6 @@ public:
     /** 清理工作流配置列表 */
     UFUNCTION(BlueprintCallable, Category = "ComfyUI|Workflow")
     void ClearWorkflowConfigs();
-    
-    /** 重新加载所有工作流配置 */
-    UFUNCTION(BlueprintCallable, Category = "ComfyUI|Workflow")
-    void RefreshWorkflowConfigs();
 
 protected:
     /** 自定义工作流配置列表 */
@@ -133,7 +113,4 @@ private:
     /** 根据名称查找工作流配置的内部版本 */
     FWorkflowConfig* FindWorkflowConfigInternal(const FString& WorkflowName);
     const FWorkflowConfig* FindWorkflowConfigInternal(const FString& WorkflowName) const;
-    
-    /** 从配置JSON加载工作流 */
-    void LoadWorkflowsFromConfigJson(TSharedPtr<FJsonObject> ConfigJson);
 };

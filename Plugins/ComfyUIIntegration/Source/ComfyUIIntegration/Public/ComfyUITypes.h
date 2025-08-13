@@ -30,19 +30,19 @@ struct COMFYUIINTEGRATION_API FComfyUIError
 {
     GENERATED_BODY()
 
-    UPROPERTY(BlueprintReadOnly)
+    UPROPERTY(BlueprintReadOnly, Category = "ComfyUI")
     EComfyUIErrorType ErrorType = EComfyUIErrorType::None;
     
-    UPROPERTY(BlueprintReadOnly)
+    UPROPERTY(BlueprintReadOnly, Category = "ComfyUI")
     FString ErrorMessage;
     
-    UPROPERTY(BlueprintReadOnly)
+    UPROPERTY(BlueprintReadOnly, Category = "ComfyUI")
     int32 HttpStatusCode = 0;
     
-    UPROPERTY(BlueprintReadOnly)
+    UPROPERTY(BlueprintReadOnly, Category = "ComfyUI")
     FString SuggestedSolution;
     
-    UPROPERTY(BlueprintReadOnly)
+    UPROPERTY(BlueprintReadOnly, Category = "ComfyUI")
     bool bCanRetry = false;
 
     FComfyUIError() = default;
@@ -60,23 +60,23 @@ struct COMFYUIINTEGRATION_API FComfyUIProgressInfo
     GENERATED_BODY()
 
     /** 队列中的位置 (0表示正在执行) */
-    UPROPERTY(BlueprintReadOnly)
+    UPROPERTY(BlueprintReadOnly, Category = "ComfyUI")
     int32 QueuePosition = 0;
 
     /** 总体进度百分比 (0.0 - 1.0) */
-    UPROPERTY(BlueprintReadOnly)
+    UPROPERTY(BlueprintReadOnly, Category = "ComfyUI")
     float ProgressPercentage = 0.0f;
 
     /** 当前执行的节点名称 */
-    UPROPERTY(BlueprintReadOnly)
+    UPROPERTY(BlueprintReadOnly, Category = "ComfyUI")
     FString CurrentNodeName;
 
     /** 当前状态描述 */
-    UPROPERTY(BlueprintReadOnly)
+    UPROPERTY(BlueprintReadOnly, Category = "ComfyUI")
     FString StatusMessage;
 
     /** 是否正在执行 */
-    UPROPERTY(BlueprintReadOnly)
+    UPROPERTY(BlueprintReadOnly, Category = "ComfyUI")
     bool bIsExecuting = false;
 
     FComfyUIProgressInfo()

@@ -1,32 +1,13 @@
 {
-  "9": {
+  "19": {
     "inputs": {
-      "albedo": "{INPUT_ALBEDO}",
-      "mr": "{INPUT_MR}"
+      "camera_azimuths": "0, 90, 180, 270, 0, 180",
+      "camera_elevations": "0, 0, 0, 0, 90, -90",
+      "view_weights": "1, 0.5, 1, 0.5, 1, 1",
+      "fov": 1.1,
+      "ortho_scale": 1.0
     },
-    "class_type": "Hy3DBakeMultiViews"
-  },
-  "36": {
-    "inputs": {
-      "model_file": "{OUTPUT_MESH_NAME}"
-    },
-    "class_type": "Preview3D"
-  },
-  "40": {
-    "inputs": {},
     "class_type": "Hy3D21CameraConfig"
-  },
-  "56": {
-    "inputs": {
-      "image": "{INPUT_IMAGE}",
-      "resolution": "{RESOLUTION|768}",
-      "num_views": "{NUM_VIEWS|10}",
-      "elevation": "{ELEVATION|3}",
-      "size": "{SIZE|1024}",
-      "do_rescale": "{DO_RESCALE|false}",
-      "seed": "{SEED|random}"
-    },
-    "class_type": "Hy3DMultiViewsGenerator"
   },
   "60": {
     "inputs": {
@@ -35,27 +16,59 @@
     },
     "class_type": "Hy3D21LoadImageWithTransparency"
   },
-  "64": {
-    "inputs": {
-      "images": "{ALBEDO_OUTPUT}",
-      "filename_prefix": "{FILENAME_PREFIX|MV}"
-    },
-    "class_type": "SaveImage"
-  },
-  "66": {
-    "inputs": {
-      "output_mesh_name": "{OUTPUT_MESH_NAME|TexturedMesh}"
-    },
-    "class_type": "Hy3DInPaint"
-  },
   "68": {
     "inputs": {
-      "mesh_file": "{INPUT_MESH_FILE}"
+      "mesh_file": "{INPUT_MESH}"
     },
     "class_type": "Hy3D21LoadMesh"
   },
   "69": {
-    "inputs": {},
+    "inputs": {
+      "trimesh": ["68", 0]
+    },
     "class_type": "Hy3D21MeshUVWrap"
+  },
+  "56": {
+    "inputs": {
+      "view_size": 512,
+      "num_views": 10,
+      "elevation": 3,
+      "texture_size": 512,
+      "do_rescale": false,
+      "seed": 42,
+      "steps": 25,
+      "guidance_scale": 7.5,
+      "unwrap_mesh": true,
+      "trimesh": ["69", 0],
+      "camera_config": ["19", 0],
+      "image": ["60", 2]
+    },
+    "class_type": "Hy3DMultiViewsGenerator"
+  },
+  "9": {
+    "inputs": {
+      "pipeline": ["56", 0],
+      "camera_config": ["19", 0],
+      "albedo": ["56", 1],
+      "mr": ["56", 2]
+    },
+    "class_type": "Hy3DBakeMultiViews"
+  },
+  "66": {
+    "inputs": {
+      "output_mesh_name": "TexturedMesh",
+      "pipeline": ["9", 0],
+      "albedo": ["9", 1],
+      "albedo_mask": ["9", 2],
+      "mr": ["9", 3],
+      "mr_mask": ["9", 4]
+    },
+    "class_type": "Hy3DInPaint"
+  },
+  "50": {
+    "inputs": {
+      "text": ["66", 3]
+    },
+    "class_type": "ShowText|pysssss"
   }
 }

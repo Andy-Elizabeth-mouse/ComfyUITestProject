@@ -7,6 +7,10 @@
 #include "Materials/MaterialInterface.h"
 #include "Engine/StaticMeshActor.h"
 #include "Misc/EngineVersionComparison.h"
+#include "Engine/TextureRenderTarget2D.h"
+#include "Components/SceneCaptureComponent2D.h"
+#include "Engine/World.h"
+#include "UObject/ConstructorHelpers.h"
 
 // ========== FComfyUI3DPreviewViewportClient ==========
 
@@ -19,7 +23,7 @@ FComfyUI3DPreviewViewportClient::FComfyUI3DPreviewViewportClient(FPreviewScene* 
     , LastMousePosition(FVector2D::ZeroVector)
     , CameraDistance(200.0f)
     , CameraTargetLocation(FVector::ZeroVector)
-    , bLightFollowsCamera(true) // 默认启用光源跟随摄像机
+    , bLightFollowsCamera(true)
 {
     // 设置视口类型为透视视图
     ViewportType = LVT_Perspective;
@@ -27,21 +31,22 @@ FComfyUI3DPreviewViewportClient::FComfyUI3DPreviewViewportClient(FPreviewScene* 
     // 启用实时更新
     SetRealtime(true);
     
-    // 创建预览网格组件
-    if (InPreviewScene && InPreviewScene->GetWorld())
+    // 只有在PreviewScene有效时才创建组件
+    if (InPreviewScene && IsValid(InPreviewScene->GetWorld()))
     {
         PreviewMeshComponent = NewObject<UStaticMeshComponent>(InPreviewScene->GetWorld());
-        if (PreviewMeshComponent)
+        if (IsValid(PreviewMeshComponent))
         {
             PreviewMeshComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
             PreviewMeshComponent->SetCastShadow(true);
+            PreviewMeshComponent->SetFlags(RF_Transient);
             InPreviewScene->AddComponent(PreviewMeshComponent, FTransform::Identity);
         }
     }
     
     SetupDefaultCamera();
     
-    // 设置默认光照（PreviewScene通过父类的GetPreviewScene()访问）
+    // 设置默认光照
     if (GetPreviewScene())
     {
         SetupDefaultLighting();
@@ -50,16 +55,19 @@ FComfyUI3DPreviewViewportClient::FComfyUI3DPreviewViewportClient(FPreviewScene* 
 
 FComfyUI3DPreviewViewportClient::~FComfyUI3DPreviewViewportClient()
 {
-    if (PreviewMeshComponent)
-    {
-        PreviewMeshComponent->DestroyComponent();
-        PreviewMeshComponent = nullptr;
-    }
+    // 不主动销毁组件，让PreviewScene处理
+    // 强制调用DestroyComponent可能导致UObjectArray越界
+    PreviewMeshComponent = nullptr;
+    CurrentPreviewMesh = nullptr;
 }
 
 void FComfyUI3DPreviewViewportClient::SetPreviewMesh(UStaticMesh* InStaticMesh)
 {
     CurrentPreviewMesh = InStaticMesh;
+    if (IsValid(CurrentPreviewMesh))
+    {
+        CurrentPreviewMesh->SetFlags(RF_Transient);
+    }
     UpdatePreviewMesh();
 }
 
@@ -69,12 +77,12 @@ void FComfyUI3DPreviewViewportClient::ClearPreview()
     UpdatePreviewMesh();
 }
 
-void FComfyUI3DPreviewViewportClient::Tick(float DeltaSeconds)
-{
-    FEditorViewportClient::Tick(DeltaSeconds);
+// void FComfyUI3DPreviewViewportClient::Tick(float DeltaSeconds)
+// {
+//     FEditorViewportClient::Tick(DeltaSeconds);
     
-    // 可以在这里添加动画或其他逻辑
-}
+//     // 可以在这里添加动画或其他逻辑
+// }
 
 bool FComfyUI3DPreviewViewportClient::InputKey(const FInputKeyEventArgs& InEventArgs)
 {
@@ -175,27 +183,27 @@ FLinearColor FComfyUI3DPreviewViewportClient::GetBackgroundColor() const
 
 void FComfyUI3DPreviewViewportClient::SetupDefaultLighting()
 {
-    // FPreviewScene* PreviewScene = GetPreviewScene();
-    if (!PreviewScene) return;
+    FPreviewScene* _PreviewScene = GetPreviewScene();
+    if (!_PreviewScene) return;
     
     // 设置默认的适中光照强度
-    PreviewScene->SetLightBrightness(0.05f);  // 降低定向光强度，避免过曝
-    PreviewScene->SetSkyBrightness(1.0f);  // 设置环境光强度
+    _PreviewScene->SetLightBrightness(0.05f);  // 降低定向光强度，避免过曝
+    // PreviewScene->SetSkyBrightness(1.0f);  // 设置环境光强度
     
     // 设置初始光照方向
     FRotator DefaultLightRotation(-45.0f, 30.0f, 0.0f);
-    PreviewScene->SetLightDirection(DefaultLightRotation);
+    _PreviewScene->SetLightDirection(DefaultLightRotation);
     
     UE_LOG(LogTemp, Log, TEXT("FComfyUI3DPreviewViewportClient: Setup default lighting"));
 }
 
 void FComfyUI3DPreviewViewportClient::SetLightDirection(const FRotator& Direction)
 {
-    // FPreviewScene* PreviewScene = GetPreviewScene();
-    if (PreviewScene)
+    FPreviewScene* _PreviewScene = GetPreviewScene();
+    if (_PreviewScene)
     {
-        PreviewScene->SetLightDirection(Direction);
-        UE_LOG(LogTemp, Log, TEXT("FComfyUI3DPreviewViewportClient: Set light direction to %s"), 
+        _PreviewScene->SetLightDirection(Direction);
+        UE_LOG(LogTemp, VeryVerbose, TEXT("FComfyUI3DPreviewViewportClient: Set light direction to %s"), 
             *Direction.ToString());
     }
 }
@@ -241,18 +249,17 @@ void FComfyUI3DPreviewViewportClient::UpdateCameraPosition()
 
 void FComfyUI3DPreviewViewportClient::UpdatePreviewMesh()
 {
-    if (!PreviewMeshComponent)
-    {
+    if (!IsValid(PreviewMeshComponent)) 
         return;
-    }
     
-    if (CurrentPreviewMesh)
+    if (IsValid(CurrentPreviewMesh))
     {
         // 设置新的静态网格
         PreviewMeshComponent->SetStaticMesh(CurrentPreviewMesh);
         
-        // 获取网格的边界框来调整摄像机位置
-        if (CurrentPreviewMesh->GetRenderData() && CurrentPreviewMesh->GetRenderData()->LODResources.Num() > 0)
+        // 获取网格的边界框来调整摄像机位置 - 添加安全检查
+        const FStaticMeshRenderData* RenderData = CurrentPreviewMesh->GetRenderData();
+        if (RenderData && RenderData->LODResources.Num() > 0)
         {
             FBoxSphereBounds Bounds = CurrentPreviewMesh->GetBounds();
             float BoundsRadius = Bounds.SphereRadius;
@@ -267,22 +274,20 @@ void FComfyUI3DPreviewViewportClient::UpdatePreviewMesh()
         
         // 确保组件可见
         PreviewMeshComponent->SetVisibility(true);
-        
-        UE_LOG(LogTemp, Log, TEXT("FComfyUI3DPreviewViewportClient: Set preview mesh: %s"), 
-               CurrentPreviewMesh ? *CurrentPreviewMesh->GetName() : TEXT("None"));
     }
     else
     {
-        // 清除网格
-        PreviewMeshComponent->SetStaticMesh(nullptr);
-        PreviewMeshComponent->SetVisibility(false);
+        // 清除网格 - 即使CurrentPreviewMesh无效也要清理组件
+        if (IsValid(PreviewMeshComponent))
+        {
+            PreviewMeshComponent->SetStaticMesh(nullptr);
+            PreviewMeshComponent->SetVisibility(false);
+        }
         
         // 重置摄像机
         CameraTargetLocation = FVector::ZeroVector;
         CameraDistance = 200.0f;
         UpdateCameraPosition();
-        
-        UE_LOG(LogTemp, Log, TEXT("FComfyUI3DPreviewViewportClient: Cleared preview mesh"));
     }
     
     // 刷新视口
@@ -293,11 +298,27 @@ void FComfyUI3DPreviewViewportClient::UpdatePreviewMesh()
 
 void SComfyUI3DPreviewViewport::Construct(const FArguments& InArgs)
 {
-    // 创建预览场景
+    // 创建PreviewScene，使用特殊配置避免触发自动保存
     FPreviewScene::ConstructionValues CVS;
+    CVS.bDefaultLighting = true;
+    CVS.bAllowAudioPlayback = false;
+    CVS.bCreatePhysicsScene = false;
+    
     PreviewScene = MakeUnique<FPreviewScene>(CVS);
     
-    // 光照设置现在由FComfyUI3DPreviewViewportClient在构造时处理
+    if (PreviewScene && PreviewScene->GetWorld())
+    {
+        UWorld* World = PreviewScene->GetWorld();
+        
+        // 关键：设置世界类型为 EditorPreview，这样自动保存系统会忽略它
+        World->WorldType = EWorldType::EditorPreview;
+        
+        // 设置标志阻止序列化和自动保存
+        World->SetFlags(RF_Transient | RF_DuplicateTransient | RF_NonPIEDuplicateTransient);
+        World->bShouldSimulatePhysics = false;
+        
+        UE_LOG(LogTemp, Log, TEXT("PreviewScene World type set to EditorPreview"));
+    }
     
     // 调用父类构造
     SEditorViewport::Construct(SEditorViewport::FArguments());
@@ -305,11 +326,13 @@ void SComfyUI3DPreviewViewport::Construct(const FArguments& InArgs)
 
 SComfyUI3DPreviewViewport::~SComfyUI3DPreviewViewport()
 {
-    if (ViewportClient.IsValid())
-    {
-        ViewportClient->Viewport = nullptr;
-    }
+    // 确保在父类销毁前清理ViewportClient
+    ViewportClient.Reset();
+    
+    // 让PreviewScene自然销毁
+    PreviewScene.Reset();
 }
+// }
 
 void SComfyUI3DPreviewViewport::SetPreviewMesh(UStaticMesh* InStaticMesh)
 {
@@ -335,6 +358,6 @@ TSharedRef<FEditorViewportClient> SComfyUI3DPreviewViewport::MakeEditorViewportC
 
 TSharedPtr<SWidget> SComfyUI3DPreviewViewport::MakeViewportToolbar()
 {
-    // 不需要工具栏，返回空
+    // 不需要工具栏
     return SNullWidget::NullWidget;
 }

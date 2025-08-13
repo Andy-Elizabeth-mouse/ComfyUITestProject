@@ -71,6 +71,20 @@ public:
     UFUNCTION(BlueprintCallable, Category = "ComfyUI|3D")
     static bool Save3DModelToFile(const FComfyUI3DModelData& ModelData, const FString& FilePath);
 
+    // === 3D模型导出功能 ===
+    
+    /** 导出静态网格为OBJ格式 */
+    UFUNCTION(BlueprintCallable, Category = "ComfyUI|3D")
+    static bool ExportStaticMeshToOBJ(UStaticMesh* StaticMesh, const FString& FilePath);
+    
+    /** 导出静态网格为FBX格式 */
+    UFUNCTION(BlueprintCallable, Category = "ComfyUI|3D")
+    static bool ExportStaticMeshToFBX(UStaticMesh* StaticMesh, const FString& FilePath);
+    
+    /** 保存原始glTF/GLB数据到文件 */
+    UFUNCTION(BlueprintCallable, Category = "ComfyUI|3D")
+    static bool SaveOriginalModelData(const TArray<uint8>& OriginalData, const FString& FilePath);
+
     // === 材质和纹理处理 ===
     
     /** 为3D模型创建材质 */

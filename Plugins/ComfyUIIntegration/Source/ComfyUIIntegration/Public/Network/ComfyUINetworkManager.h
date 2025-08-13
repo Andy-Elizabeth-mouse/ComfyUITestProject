@@ -27,7 +27,7 @@ public:
     // 图片上传请求
     void UploadImage(const FString& ServerUrl, const TArray<uint8>& ImageData, const FString& FileName, TFunction<void(const FString& UploadedImageName, bool bSuccess)> Callback);
     
-    // 3D模型上传请求
+    // 3D模型上传请求（使用ComfyUI的通用上传端点）
     void UploadModel(const FString& ServerUrl, const TArray<uint8>& ModelData, const FString& FileName, TFunction<void(const FString& UploadedModelName, bool bSuccess)> Callback);
     
     // 3D模型下载请求

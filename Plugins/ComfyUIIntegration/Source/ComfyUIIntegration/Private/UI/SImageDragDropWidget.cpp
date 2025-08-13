@@ -79,7 +79,7 @@ void SImageDragDropWidget::SetImage(UTexture2D* InTexture)
 
 void SImageDragDropWidget::ClearImage()
 {
-    CurrentTexture = nullptr;
+    CurrentTexture.Reset();
     CurrentImageBrush = nullptr;
     UpdateImagePreview();
 }
@@ -213,7 +213,7 @@ UTexture2D* SImageDragDropWidget::ExtractTextureFromDragDrop(const FDragDropEven
 
 void SImageDragDropWidget::UpdateImagePreview()
 {
-    if (CurrentTexture)
+    if (CurrentTexture.IsValid())
     {
         // 创建或更新画刷
         if (!CurrentImageBrush.IsValid())
@@ -221,7 +221,7 @@ void SImageDragDropWidget::UpdateImagePreview()
             CurrentImageBrush = MakeShareable(new FSlateBrush());
         }
         
-        CurrentImageBrush->SetResourceObject(CurrentTexture);
+        CurrentImageBrush->SetResourceObject(CurrentTexture.Get());
         CurrentImageBrush->DrawAs = ESlateBrushDrawType::Image;
         CurrentImageBrush->Tiling = ESlateBrushTileType::NoTile;
         
@@ -289,7 +289,7 @@ FSlateColor SImageDragDropWidget::GetBackgroundColor() const
 
 FText SImageDragDropWidget::GetHintText() const
 {
-    if (CurrentTexture)
+    if (CurrentTexture.IsValid())
     {
         return FText::FromString(CurrentTexture->GetName());
     }

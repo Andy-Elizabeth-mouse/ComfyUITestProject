@@ -39,12 +39,8 @@ public:
     /** 取消当前生成任务 */
     UFUNCTION(BlueprintCallable, Category = "ComfyUI")
     void CancelCurrentGeneration();
-
-    /** 检查服务器状态 */
-    UFUNCTION(BlueprintCallable, Category = "ComfyUI")
-    void CheckServerStatus();
     
-    /** 执行工作流 - C++专用 */
+    /** 执行工作流 */
     void ExecuteWorkflow(const FString& WorkflowJson, 
                         const FOnGenerationStarted& OnStarted = FOnGenerationStarted(),
                         const FOnGenerationProgress& OnProgress = FOnGenerationProgress(),
@@ -53,26 +49,27 @@ public:
                         const FOnGenerationFailed& OnFailed = FOnGenerationFailed(),
                         const FOnGenerationCompleted& OnCompleted = FOnGenerationCompleted());
     
-    /** 上传图像并获取图像名称 - C++专用 */
+    /** 上传图像并获取图像名称 */
     void UploadImage(const TArray<uint8>& ImageData, const FString& FileName, 
                     TFunction<void(const FString& UploadedImageName, bool bSuccess)> Callback);
     
-    /** 上传3D模型并获取模型名称 - C++专用 */
+    /** 上传3D模型并获取模型名称 */
     void UploadModel(const TArray<uint8>& ModelData, const FString& FileName, 
                     TFunction<void(const FString& UploadedModelName, bool bSuccess)> Callback);
     
-    /** 下载3D模型数据 - C++专用 */
+    /** 下载3D模型数据 */
     void DownloadModel(const FString& Url, 
                       TFunction<void(const TArray<uint8>& ModelData, bool bSuccess)> Callback);
     
     /** 测试服务器连接 - 带回调，C++专用 */
     void TestServerConnection(const FOnConnectionTested& OnComplete);
     
-    /** 从图像数据创建纹理 - C++专用 */
+    /** 从图像数据创建纹理 */
     UTexture2D* CreateTextureFromImageData(const TArray<uint8>& ImageData);
 
 private:
     /** 网络通信管理器，封装 HTTP 请求 */
+    UPROPERTY()
     UComfyUINetworkManager* NetworkManager;
 
     /** ComfyUI服务器URL */
@@ -150,7 +147,9 @@ private:
     FString CurrentPromptId;
 
     /** 轮询计时器 */
+    UPROPERTY()
     FTimerHandle StatusPollTimer;
+    UPROPERTY()
     FTimerHandle RetryTimerHandle;
     
     /** 异步轮询相关 */

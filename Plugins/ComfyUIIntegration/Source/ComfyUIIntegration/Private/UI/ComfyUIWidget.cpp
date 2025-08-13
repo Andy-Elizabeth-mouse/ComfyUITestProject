@@ -7,6 +7,7 @@
 #include "Workflow/ComfyUIWorkflowManager.h"
 #include "Workflow/ComfyUIWorkflowExecutor.h"
 #include "Utils/ComfyUIFileManager.h"
+#include "Asset/ComfyUI3DAssetManager.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Layout/SSeparator.h"
 #include "Widgets/Text/STextBlock.h"
@@ -60,26 +61,14 @@
 
 SComfyUIWidget::~SComfyUIWidget()
 {
-    // 取消正在进行的生成
-    if (CurrentClient)
-    {
-        CurrentClient->CancelCurrentGeneration();
-    }
+    // 清理瞬态网格对象
+    CleanupTransientMesh();
     
-    // 清理3D预览视口
-    if (ModelViewport.IsValid())
-    {
-        ModelViewport->ClearPreview();
-    }
-    
-    // 清理生成的内容引用
-    GeneratedTexture = nullptr;
-    GeneratedMesh = nullptr;
-    
-    // 清理当前图像画刷
+    // 仅清理 Slate 智能指针，避免访问 UObject
+    ModelViewport.Reset();
     CurrentImageBrush.Reset();
     
-    UE_LOG(LogTemp, Log, TEXT("SComfyUIWidget destroyed"));
+    // UObject 的生命周期交给 UE 管理，不手动操作
 }
 
 void SComfyUIWidget::Construct(const FArguments& InArgs)
@@ -675,14 +664,14 @@ TSharedRef<SWidget> SComfyUIWidget::CreateImagePreviewWidget()
                     ]
                     
                     // 索引2：空状态
-                    + SWidgetSwitcher::Slot()
-                    [
-                        SNew(STextBlock)
-                        .Text(LOCTEXT("NoContentGenerated", "暂无生成内容"))
-                        .Justification(ETextJustify::Center)
-                        .Font(FCoreStyle::GetDefaultFontStyle("Regular", 12))
-                        .ColorAndOpacity(FLinearColor(0.5f, 0.5f, 0.5f))
-                    ]
+                    // + SWidgetSwitcher::Slot()
+                    // [
+                    //     SNew(STextBlock)
+                    //     .Text(LOCTEXT("NoContentGenerated", "暂无生成内容"))
+                    //     .Justification(ETextJustify::Center)
+                    //     .Font(FCoreStyle::GetDefaultFontStyle("Regular", 12))
+                    //     .ColorAndOpacity(FLinearColor(0.5f, 0.5f, 0.5f))
+                    // ]
                 ]
             ]
         ];
@@ -874,12 +863,18 @@ FReply SComfyUIWidget::OnSaveClicked()
     }
     else if (GeneratedMesh)
     {
-        // 保存3D模型到项目的默认路径
-        // TODO: 实现3D模型保存功能
-        FNotificationInfo Info(LOCTEXT("MeshSaveNotImplemented", "3D模型保存功能正在开发中"));
-        Info.ExpireDuration = 3.0f;
-        Info.Image = FAppStyle::GetBrush(TEXT("NotificationList.DefaultMessage"));
-        FSlateNotificationManager::Get().AddNotification(Info);
+        // 保存3D模型到项目的默认路径作为UE资产
+        FString ModelPackagePath = TEXT("/Game/ComfyUI/Generated/Models");
+        if (UComfyUI3DAssetManager::Save3DModelToProject(GeneratedMesh, DefaultName, ModelPackagePath))
+        {
+            ShowSaveSuccessNotification(FString::Printf(TEXT("%s/%s"), *ModelPackagePath, *DefaultName));
+            UE_LOG(LogTemp, Log, TEXT("OnSaveClicked: Successfully saved 3D model as UE asset: %s"), *DefaultName);
+        }
+        else
+        {
+            ShowSaveErrorNotification(TEXT("保存3D模型到项目时发生错误"));
+            UE_LOG(LogTemp, Error, TEXT("OnSaveClicked: Failed to save 3D model as UE asset"));
+        }
     }
     else
     {
@@ -922,7 +917,7 @@ FReply SComfyUIWidget::OnSaveAsClicked()
     {
         DefaultFilename = FString::Printf(TEXT("ComfyUI_Generated_%s.obj"),
             *FDateTime::Now().ToString(TEXT("%Y%m%d_%H%M%S")));
-        FileExtensions = TEXT("OBJ Files (*.obj)|*.obj|GLB Files (*.glb)|*.glb|GLTF Files (*.gltf)|*.gltf");
+        FileExtensions = TEXT("FBX Files (*.fbx)|*.fbx|OBJ Files (*.obj)|*.obj|GLB Files (*.glb)|*.glb|GLTF Files (*.gltf)|*.gltf");
         DialogTitle = TEXT("保存生成的3D模型");
     }
 
@@ -946,8 +941,47 @@ FReply SComfyUIWidget::OnSaveAsClicked()
         }
         else if (bHasMesh)
         {
-            // TODO: 实现3D模型保存功能
-            ShowSaveErrorNotification(TEXT("3D模型保存功能暂未实现"));
+            // 根据文件扩展名选择不同的导出方式
+            FString FileExtension = FPaths::GetExtension(SavePath).ToLower();
+            bool bSaveSuccess = false;
+            
+            if (FileExtension == TEXT("gltf") || FileExtension == TEXT("glb"))
+            {
+                // 对于glTF格式，如果有原始数据则直接保存，否则显示错误
+                if (GeneratedMeshOriginalData.Num() > 0 && 
+                    (GeneratedMeshOriginalFormat == TEXT("gltf") || GeneratedMeshOriginalFormat == TEXT("glb")))
+                {
+                    bSaveSuccess = UComfyUI3DAssetManager::SaveOriginalModelData(GeneratedMeshOriginalData, SavePath);
+                    UE_LOG(LogTemp, Log, TEXT("OnSaveAsClicked: Saved original glTF data, format: %s"), *GeneratedMeshOriginalFormat);
+                }
+                else
+                {
+                    ShowSaveErrorNotification(TEXT("该模型无原始glTF数据，请选择OBJ或FBX格式"));
+                    return FReply::Handled();
+                }
+            }
+            else if (FileExtension == TEXT("obj"))
+            {
+                // 使用UE OBJ导出器
+                bSaveSuccess = UComfyUI3DAssetManager::ExportStaticMeshToOBJ(GeneratedMesh, SavePath);
+                UE_LOG(LogTemp, Log, TEXT("OnSaveAsClicked: Exported to OBJ format"));
+            }
+            else if (FileExtension == TEXT("fbx"))
+            {
+                // 使用UE FBX导出器
+                bSaveSuccess = UComfyUI3DAssetManager::ExportStaticMeshToFBX(GeneratedMesh, SavePath);
+                UE_LOG(LogTemp, Log, TEXT("OnSaveAsClicked: Exported to FBX format"));
+            }
+            else
+            {
+                ShowSaveErrorNotification(FString::Printf(TEXT("不支持的文件格式: %s"), *FileExtension));
+                return FReply::Handled();
+            }
+            
+            if (bSaveSuccess)
+                ShowSaveSuccessNotification(FString::Printf(TEXT("3D模型已保存到: %s"), *SavePath));
+            else
+                ShowSaveErrorNotification(FString::Printf(TEXT("保存3D模型为%s格式时发生错误"), *FileExtension.ToUpper()));
         }
     }
     else
@@ -1186,8 +1220,11 @@ void SComfyUIWidget::OnImageGenerationComplete(UTexture2D* GeneratedImage)
     }
 }
 
-void SComfyUIWidget::OnMeshGenerationComplete(UStaticMesh* InGeneratedMesh)
+void SComfyUIWidget::OnMeshGenerationComplete(UStaticMesh* InGeneratedMesh, const TArray<uint8>& OriginalData, const FString& OriginalFormat)
 {
+    // 清理之前的瞬态网格
+    CleanupTransientMesh();
+    
     // 重新启用生成按钮并恢复生成状态
     GenerateButton->SetEnabled(true);
     bIsGenerating = false;
@@ -1196,6 +1233,13 @@ void SComfyUIWidget::OnMeshGenerationComplete(UStaticMesh* InGeneratedMesh)
     if (InGeneratedMesh)
     {
         this->GeneratedMesh = InGeneratedMesh;
+        
+        // 保存原始数据用于文件导出
+        this->GeneratedMeshOriginalData = OriginalData;
+        this->GeneratedMeshOriginalFormat = OriginalFormat.ToLower();
+        
+        UE_LOG(LogTemp, Log, TEXT("OnMeshGenerationComplete: Saved original data, format: %s, size: %d bytes"), 
+               *OriginalFormat, OriginalData.Num());
         
         // 在3D视口中显示生成的模型
         if (ModelViewport.IsValid())
@@ -1245,6 +1289,9 @@ void SComfyUIWidget::SwitchToModelPreview()
 
 void SComfyUIWidget::ClearContentPreview()
 {
+    // 清理之前的瞬态网格
+    CleanupTransientMesh();
+    
     // 清除生成的内容
     GeneratedTexture = nullptr;
     GeneratedMesh = nullptr;
@@ -1259,6 +1306,26 @@ void SComfyUIWidget::ClearContentPreview()
     if (ContentSwitcher.IsValid())
     {
         ContentSwitcher->SetActiveWidgetIndex(2); // 切换到空状态
+    }
+}
+
+void SComfyUIWidget::CleanupTransientMesh()
+{
+    // 如果当前有生成的网格且是瞬态对象，清理它
+    if (GeneratedMesh && GeneratedMesh->HasAnyFlags(RF_Transient))
+    {
+        UE_LOG(LogTemp, Log, TEXT("CleanupTransientMesh: Cleaning up previous transient mesh: %s"), 
+               *GeneratedMesh->GetName());
+        
+        // 从根集合中移除，允许被垃圾回收
+        if (GeneratedMesh->IsRooted())
+        {
+            GeneratedMesh->RemoveFromRoot();
+        }
+        
+        // 标记为pending kill
+        GeneratedMesh->MarkAsGarbage();
+        GeneratedMesh = nullptr;
     }
 }
 

@@ -45,11 +45,9 @@ UComfyUIClient* UComfyUIClient::GetInstance()
 
 void UComfyUIClient::DestroyInstance()
 {
-    if (Instance)
-    {
-        Instance->RemoveFromRoot();
-        Instance = nullptr;
-    }
+    // 在插件环境中，不主动操作根引用
+    // Instance 由 UE 的 GC 系统自动管理
+    Instance = nullptr;
 }
 
 UComfyUIClient::UComfyUIClient()
@@ -88,32 +86,6 @@ void UComfyUIClient::SetServerUrl(const FString& Url)
     ServerUrl = Url;
 }
 
-void UComfyUIClient::CheckServerStatus()
-{
-    // 使用 NetworkManager 检查服务器状态
-    EnsureNetworkManagerInitialized();
-    if (NetworkManager)
-    {
-        FString StatusUrl = ServerUrl + TEXT("/system_stats");
-        NetworkManager->SendGetRequest(StatusUrl, 
-            [this](const FString& Response, bool bSuccess)
-            {
-                if (bSuccess)
-                {
-                    UE_LOG(LogTemp, Log, TEXT("Server status check successful: %s"), *Response);
-                }
-                else
-                {
-                    UE_LOG(LogTemp, Warning, TEXT("Server status check failed"));
-                }
-            });
-    }
-    else
-    {
-        UE_LOG(LogTemp, Error, TEXT("NetworkManager not initialized"));
-    }
-}
-
 void UComfyUIClient::PollGenerationStatus(const FString& PromptId)
 {
     // 使用 NetworkManager 进行状态轮询
@@ -143,24 +115,9 @@ void UComfyUIClient::OnQueueStatusChecked(const FString& ResponseContent, bool b
 {
     if (!bWasSuccessful)
     {
+        StopAsyncPolling();
         FComfyUIError Error(EComfyUIErrorType::ConnectionFailed, TEXT("无法获取生成状态"), 0, TEXT("检查网络连接"), true);
-        
-        // 对于状态检查失败，我们可以重试状态查询而不是整个生成过程
-        if (NetworkManager->ShouldRetryRequest(Error, CurrentRetryCount, MaxRetryAttempts))
-        {
-            CurrentRetryCount++;
-            OnRetryAttemptCallback.ExecuteIfBound(CurrentRetryCount);
-            
-            UE_LOG(LogTemp, Warning, TEXT("Retrying status check... Attempt %d/%d"), 
-                   CurrentRetryCount, MaxRetryAttempts);
-            
-            // 使用异步重试代替计时器
-            StartAsyncRetry([this]() { PollGenerationStatus(CurrentPromptId); }, RetryDelaySeconds);
-        }
-        else
-        {
-            HandleRequestError(Error, [this]() { RetryCurrentOperation(); });
-        }
+        HandleRequestError(Error, [this]() { PollGenerationStatus(CurrentPromptId); });
         return;
     }
 
@@ -171,10 +128,7 @@ void UComfyUIClient::OnQueueStatusChecked(const FString& ResponseContent, bool b
     OnGenerationProgressCallback.ExecuteIfBound(ProgressInfo);
     
     // 如果任务被取消，停止处理
-    if (bIsCancelled)
-    {
-        return;
-    }
+    if (bIsCancelled) return;
     
     // 解析响应检查是否完成
     TSharedPtr<FJsonObject> JsonObject;
@@ -311,10 +265,7 @@ void UComfyUIClient::OnQueueStatusChecked(const FString& ResponseContent, bool b
         UE_LOG(LogTemp, VeryVerbose, TEXT("Generation still in progress, continuing to poll..."));
         
         // 使用异步轮询代替计时器
-        if (!bIsPolling)
-        {
-            StartAsyncPolling();
-        }
+        if (!bIsPolling) StartAsyncPolling();
     }
     else
     {
@@ -480,6 +431,8 @@ void UComfyUIClient::HandleRequestError(const FComfyUIError& Error, TFunction<vo
         OnGenerationFailedCallback.ExecuteIfBound(Error, false);
         OnImageGeneratedCallback.ExecuteIfBound(nullptr);
         
+        StopAsyncPolling();
+        StopAsyncRetry();
         ResetRetryState();
     }
 }
@@ -815,7 +768,7 @@ void UComfyUIClient::On3DModelDownloaded(const TArray<uint8>& ModelData, bool bW
         // OnGenerationCompletedCallback.ExecuteIfBound();
         
         // 最后通知3D模型生成完成
-        OnMeshGeneratedCallback.ExecuteIfBound(GeneratedMesh);
+        OnMeshGeneratedCallback.ExecuteIfBound(GeneratedMesh, ModelData, FileExtension);
     }
     else
     {

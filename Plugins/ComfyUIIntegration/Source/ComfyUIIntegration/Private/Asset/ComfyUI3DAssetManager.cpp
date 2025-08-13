@@ -18,12 +18,18 @@
 #include "HAL/PlatformFilemanager.h"
 #include "MeshDescription.h"
 #include "StaticMeshAttributes.h"
+#include "StaticMeshOperations.h"
 #include "AssetImportTask.h"
 #include "AssetToolsModule.h"
 #include "IAssetTools.h"
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonReader.h"
+// 导出器相关头文件
+#include "Exporters/Exporter.h"
+#include "AssetExportTask.h"
+#include "StaticMeshResources.h"
+#include "Containers/UnrealString.h"
 
 UComfyUI3DAssetManager::UComfyUI3DAssetManager()
 {
@@ -110,12 +116,13 @@ UStaticMesh* UComfyUI3DAssetManager::CreateStaticMeshFromGLTF(const TArray<uint8
 
         // 设置导入任务参数
         ImportTask->Filename = TempFilePath;
-        ImportTask->DestinationPath = TEXT("/Temp/ComfyUI_GLTFImport");
+        ImportTask->DestinationPath = TEXT("/Engine/Transient"); // 使用瞬态路径避免自动保存问题
         ImportTask->DestinationName = TempFileName;
         ImportTask->bReplaceExisting = true;
         ImportTask->bReplaceExistingSettings = true;
         ImportTask->bAutomated = true;
-        ImportTask->bSave = false; // 不保存到磁盘，只是临时导入
+        // ImportTask->bSave = false; // 不保存到磁盘，只是临时导入
+        ImportTask->bSave = true;
 
         UE_LOG(LogTemp, Log, TEXT("CreateStaticMeshFromGLTF: Starting import task for file: %s"), *TempFilePath);
 
@@ -141,6 +148,10 @@ UStaticMesh* UComfyUI3DAssetManager::CreateStaticMeshFromGLTF(const TArray<uint8
                 {
                     if (UStaticMesh* StaticMesh = Cast<UStaticMesh>(ImportedObject))
                     {
+                        // 将导入的网格标记为瞬态对象，避免被自动保存系统处理
+                        StaticMesh->SetFlags(RF_Transient);
+                        StaticMesh->AddToRoot(); // 防止被垃圾回收
+                        
                         ImportedMesh = StaticMesh;
                         UE_LOG(LogTemp, Log, TEXT("CreateStaticMeshFromGLTF: Successfully imported static mesh: %s"), 
                                *StaticMesh->GetName());
@@ -228,9 +239,22 @@ bool UComfyUI3DAssetManager::Save3DModelToProject(UStaticMesh* StaticMesh, const
         // 复制静态网格数据
         if (StaticMesh->GetRenderData() && StaticMesh->GetRenderData()->LODResources.Num() > 0)
         {
-            // 初始化渲染数据
+            // 初始化源模型
             NewStaticMesh->SetNumSourceModels(1);
             FStaticMeshSourceModel& SourceModel = NewStaticMesh->GetSourceModel(0);
+            
+            // 获取源网格的MeshDescription
+            FMeshDescription SourceMeshDesc;
+            if (StaticMesh->GetSourceModel(0).CloneMeshDescription(SourceMeshDesc))
+            {
+                // 复制MeshDescription到新的静态网格
+                FMeshDescription* NewMeshDescription = SourceModel.CreateMeshDescription();
+                if (NewMeshDescription)
+                {
+                    *NewMeshDescription = SourceMeshDesc;
+                    SourceModel.CommitMeshDescription(false);
+                }
+            }
             
             // 复制构建设置
             SourceModel.BuildSettings = StaticMesh->GetSourceModel(0).BuildSettings;
@@ -472,19 +496,77 @@ UStaticMesh* UComfyUI3DAssetManager::CreateStaticMeshFromVertices(const TArray<F
     FStaticMeshAttributes StaticMeshAttributes(MeshDescription);
     StaticMeshAttributes.Register();
 
-    // TODO: 使用新的UE5 MeshDescription API来构建静态网格
-    // 这是一个复杂的过程，需要正确设置顶点、面和UV数据
-    
-    // 简化实现：先创建基本结构
+    // 创建多边形组（材质槽）
+    FPolygonGroupID PolygonGroupID = MeshDescription.CreatePolygonGroup();
+    TPolygonGroupAttributesRef<FName> PolygonGroupImportedMaterialSlotNames = StaticMeshAttributes.GetPolygonGroupMaterialSlotNames();
+    PolygonGroupImportedMaterialSlotNames[PolygonGroupID] = FName("Material_0");
+
+    // 获取属性引用
+    TVertexAttributesRef<FVector3f> VertexPositions = StaticMeshAttributes.GetVertexPositions();
+    TVertexInstanceAttributesRef<FVector3f> VertexInstanceNormals = StaticMeshAttributes.GetVertexInstanceNormals();
+    TVertexInstanceAttributesRef<FVector2f> VertexInstanceUVs = StaticMeshAttributes.GetVertexInstanceUVs();
+
+    // 创建顶点
+    TArray<FVertexID> VertexIDs;
+    VertexIDs.Reserve(Vertices.Num());
+    for (const FVector& Vertex : Vertices)
+    {
+        FVertexID VertexID = MeshDescription.CreateVertex();
+        VertexPositions[VertexID] = FVector3f(Vertex);
+        VertexIDs.Add(VertexID);
+    }
+
+    // 创建三角形面
+    for (int32 i = 0; i < Indices.Num(); i += 3)
+    {
+        TArray<FVertexInstanceID> VertexInstanceIDs;
+        VertexInstanceIDs.Reserve(3);
+        
+        for (int32 j = 0; j < 3; j++)
+        {
+            int32 VertexIndex = Indices[i + j];
+            if (!VertexIDs.IsValidIndex(VertexIndex))
+                continue;
+                
+            FVertexInstanceID VertexInstanceID = MeshDescription.CreateVertexInstance(VertexIDs[VertexIndex]);
+            VertexInstanceIDs.Add(VertexInstanceID);
+            
+            // 设置UV坐标
+            if (UVs.IsValidIndex(VertexIndex))
+                VertexInstanceUVs.Set(VertexInstanceID, 0, FVector2f(UVs[VertexIndex]));
+            else
+            {
+                UE_LOG(LogTemp, Warning, TEXT("CreateStaticMeshFromVertices: UVs not provided for vertex index %d, setting to (0,0)"), VertexIndex);
+                VertexInstanceUVs.Set(VertexInstanceID, 0, FVector2f(0.0f, 0.0f));
+            }
+        }
+        
+        if (VertexInstanceIDs.Num() == 3)
+            MeshDescription.CreatePolygon(PolygonGroupID, VertexInstanceIDs);
+    }
+
+    // 设置MeshDescription到源模型
+    FMeshDescription* NewMeshDescription = SourceModel.CreateMeshDescription();
+    if (NewMeshDescription)
+    {
+        *NewMeshDescription = MeshDescription;
+        SourceModel.CommitMeshDescription(false);
+    }
+
+    // 设置构建设置
     SourceModel.BuildSettings.bRecomputeNormals = true;
     SourceModel.BuildSettings.bRecomputeTangents = true;
     SourceModel.BuildSettings.bUseMikkTSpace = true;
     SourceModel.BuildSettings.bGenerateLightmapUVs = true;
+    SourceModel.BuildSettings.bBuildReversedIndexBuffer = false;
+    SourceModel.BuildSettings.bUseFullPrecisionUVs = false;
+    SourceModel.BuildSettings.bUseHighPrecisionTangentBasis = false;
+
+    // 构建静态网格
+    StaticMesh->Build(false);
     
     UE_LOG(LogTemp, Log, TEXT("CreateStaticMeshFromVertices: Created static mesh with %d vertices, %d indices"), 
            Vertices.Num(), Indices.Num());
-    
-    UE_LOG(LogTemp, Warning, TEXT("CreateStaticMeshFromVertices: MeshDescription building not fully implemented yet"));
 
     return StaticMesh;
 }
@@ -647,7 +729,7 @@ UStaticMesh* UComfyUI3DAssetManager::ParseGLBData(const TArray<uint8>& GLBData)
     if (Version != 2)
         LOG_AND_RETURN(Error, nullptr, "ParseGLBData: Unsupported GLB version: %d", Version);
 
-    if (Length > *reinterpret_cast<const uint32*>(GLBData.Num()))
+    if (Length > static_cast<uint32>(GLBData.Num()))
         LOG_AND_RETURN(Error, nullptr, "ParseGLBData: GLB length exceeds data size");
 
     // 读取JSON块
@@ -660,7 +742,7 @@ UStaticMesh* UComfyUI3DAssetManager::ParseGLBData(const TArray<uint8>& GLBData)
     if (JsonChunkType != 0x4E4F534A) // "JSON"
         LOG_AND_RETURN(Error, nullptr, "ParseGLBData: Expected JSON chunk");
 
-    if (12 + 8 + JsonChunkLength > *reinterpret_cast<const uint32*>(GLBData.Num()))
+    if (12 + 8 + JsonChunkLength > static_cast<uint32>(GLBData.Num()))
         LOG_AND_RETURN(Error, nullptr, "ParseGLBData: JSON chunk exceeds data size");
 
     // 提取JSON内容
@@ -722,4 +804,124 @@ UStaticMesh* UComfyUI3DAssetManager::ParseGLTFJson(const FString& JsonContent)
     UE_LOG(LogTemp, Warning, TEXT("ParseGLTFJson: Using placeholder cube mesh (full glTF parsing not implemented)"));
     
     return CreateStaticMeshFromVertices(Vertices, Indices, UVs);
+}
+
+// === 新增导出功能实现 ===
+
+bool UComfyUI3DAssetManager::ExportStaticMeshToOBJ(UStaticMesh* StaticMesh, const FString& FilePath)
+{
+    if (!StaticMesh)
+        LOG_AND_RETURN(Error, false, "ExportStaticMeshToOBJ: StaticMesh is null");
+
+    if (FilePath.IsEmpty())
+        LOG_AND_RETURN(Error, false, "ExportStaticMeshToOBJ: FilePath is empty");
+
+    // 确保目录存在
+    FString FileDirectory = FPaths::GetPath(FilePath);
+    if (!UComfyUIFileManager::EnsureDirectoryExists(FileDirectory))
+        LOG_AND_RETURN(Error, false, "ExportStaticMeshToOBJ: Failed to create directory: %s", *FileDirectory);
+
+    try
+    {
+        // 使用UE5推荐的方式：通过UAssetExportTask和RunAssetExportTask
+        UAssetExportTask* ExportTask = NewObject<UAssetExportTask>();
+        if (!ExportTask)
+            LOG_AND_RETURN(Error, false, "ExportStaticMeshToOBJ: Failed to create export task");
+
+        ExportTask->Object = StaticMesh;
+        ExportTask->Filename = FilePath;
+        ExportTask->bSelected = false;
+        ExportTask->bReplaceIdentical = true;
+        ExportTask->bPrompt = false;
+        ExportTask->bUseFileArchive = false;
+        ExportTask->bWriteEmptyFiles = false;
+        
+        // 查找OBJ导出器
+        UExporter* OBJExporter = UExporter::FindExporter(StaticMesh, TEXT("OBJ"));
+        if (!OBJExporter)
+            LOG_AND_RETURN(Error, false, "ExportStaticMeshToOBJ: Failed to find OBJ exporter");
+            
+        ExportTask->Exporter = OBJExporter;
+
+        // 使用推荐的导出API
+        bool bExportResult = UExporter::RunAssetExportTask(ExportTask);
+        
+        if (bExportResult)
+            LOG_AND_RETURN(Log, true, "ExportStaticMeshToOBJ: Successfully exported to %s", *FilePath);
+        else
+            LOG_AND_RETURN(Error, false, "ExportStaticMeshToOBJ: Failed to export StaticMesh to OBJ file");
+    }
+    catch (...)
+    {
+        LOG_AND_RETURN(Error, false, "ExportStaticMeshToOBJ: Exception occurred during export");
+    }
+}
+
+bool UComfyUI3DAssetManager::ExportStaticMeshToFBX(UStaticMesh* StaticMesh, const FString& FilePath)
+{
+    if (!StaticMesh)
+        LOG_AND_RETURN(Error, false, "ExportStaticMeshToFBX: StaticMesh is null");
+
+    if (FilePath.IsEmpty())
+        LOG_AND_RETURN(Error, false, "ExportStaticMeshToFBX: FilePath is empty");
+
+    // 确保目录存在
+    FString FileDirectory = FPaths::GetPath(FilePath);
+    if (!UComfyUIFileManager::EnsureDirectoryExists(FileDirectory))
+        LOG_AND_RETURN(Error, false, "ExportStaticMeshToFBX: Failed to create directory: %s", *FileDirectory);
+
+    try
+    {
+        // 使用UE5推荐的方式：通过UAssetExportTask和RunAssetExportTask
+        UAssetExportTask* ExportTask = NewObject<UAssetExportTask>();
+        if (!ExportTask)
+            LOG_AND_RETURN(Error, false, "ExportStaticMeshToFBX: Failed to create export task");
+
+        ExportTask->Object = StaticMesh;
+        ExportTask->Filename = FilePath;
+        ExportTask->bSelected = false;
+        ExportTask->bReplaceIdentical = true;
+        ExportTask->bPrompt = false;
+        ExportTask->bUseFileArchive = false;
+        ExportTask->bWriteEmptyFiles = false;
+        
+        // 查找FBX导出器
+        UExporter* FBXExporter = UExporter::FindExporter(StaticMesh, TEXT("FBX"));
+        if (!FBXExporter)
+            LOG_AND_RETURN(Error, false, "ExportStaticMeshToFBX: Failed to find FBX exporter");
+            
+        ExportTask->Exporter = FBXExporter;
+
+        // 使用推荐的导出API
+        bool bExportResult = UExporter::RunAssetExportTask(ExportTask);
+        
+        if (bExportResult)
+            LOG_AND_RETURN(Log, true, "ExportStaticMeshToFBX: Successfully exported to %s", *FilePath);
+        else
+            LOG_AND_RETURN(Error, false, "ExportStaticMeshToFBX: Failed to export StaticMesh to FBX file");
+    }
+    catch (...)
+    {
+        LOG_AND_RETURN(Error, false, "ExportStaticMeshToFBX: Exception occurred during export");
+    }
+}
+
+bool UComfyUI3DAssetManager::SaveOriginalModelData(const TArray<uint8>& OriginalData, const FString& FilePath)
+{
+    if (OriginalData.Num() == 0)
+        LOG_AND_RETURN(Error, false, "SaveOriginalModelData: OriginalData is empty");
+
+    if (FilePath.IsEmpty())
+        LOG_AND_RETURN(Error, false, "SaveOriginalModelData: FilePath is empty");
+
+    // 确保目录存在
+    FString FileDirectory = FPaths::GetPath(FilePath);
+    if (!UComfyUIFileManager::EnsureDirectoryExists(FileDirectory))
+        LOG_AND_RETURN(Error, false, "SaveOriginalModelData: Failed to create directory: %s", *FileDirectory);
+
+    // 直接保存原始数据
+    if (!FFileHelper::SaveArrayToFile(OriginalData, *FilePath))
+        LOG_AND_RETURN(Error, false, "SaveOriginalModelData: Failed to save data to file: %s", *FilePath);
+
+    LOG_AND_RETURN(Log, true, "SaveOriginalModelData: Successfully saved original data to %s", *FilePath);
 }

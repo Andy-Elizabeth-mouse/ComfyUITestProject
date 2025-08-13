@@ -30,7 +30,8 @@ public:
     void SetLightDirection(const FRotator& Direction);
 
     // FEditorViewportClient 接口
-    virtual void Tick(float DeltaSeconds) override;
+    virtual void Tick(float DeltaSeconds) override { };
+    virtual void TrackingStopped() override { };
     virtual bool InputKey(const FInputKeyEventArgs& InEventArgs) override;
     virtual bool InputAxis(FViewport* InViewport, FInputDeviceId ControllerId, FKey Key, float Delta, float DeltaTime, int32 NumSamples = 1, bool bGamepad = false) override;
     virtual FLinearColor GetBackgroundColor() const override;
@@ -85,8 +86,10 @@ protected:
 
 private:
     /** 视口客户端 */
+    UPROPERTY()
     TSharedPtr<FComfyUI3DPreviewViewportClient> ViewportClient;
     
     /** 预览场景 */
+    UPROPERTY()
     TUniquePtr<FPreviewScene> PreviewScene;
 };

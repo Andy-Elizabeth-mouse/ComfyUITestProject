@@ -44,14 +44,6 @@ public:
     UFUNCTION(BlueprintCallable, Category = "ComfyUI|Workflow")
     TArray<FString> GetAvailableWorkflowNames() const;
     
-    /** 根据名称获取工作流配置 */
-    UFUNCTION(BlueprintCallable, Category = "ComfyUI|Workflow")
-    bool GetWorkflowConfig(const FString& WorkflowName, FWorkflowConfig& OutConfig) const;
-    
-    /** 刷新工作流配置 */
-    UFUNCTION(BlueprintCallable, Category = "ComfyUI|Workflow")
-    void RefreshWorkflows();
-    
     /** 验证工作流文件 */
     UFUNCTION(BlueprintCallable, Category = "ComfyUI|Workflow")
     bool ValidateWorkflow(const FString& FilePath, FString& OutError);
@@ -68,32 +60,19 @@ public:
 
     // ========== 参数管理接口 ==========
     
-    /** 获取工作流参数列表 */
-    UFUNCTION(BlueprintCallable, Category = "ComfyUI|Workflow")
-    TArray<FString> GetWorkflowParameters(const FString& WorkflowName) const;
-    
-    /** 设置工作流参数 - C++专用 */
+    /** 设置工作流参数 */
     bool SetWorkflowParameter(const FString& WorkflowName, const FString& ParameterName, const FString& Value);
     
-    /** 获取工作流参数值 - C++专用 */
+    /** 获取工作流参数值 */
     FString GetWorkflowParameter(const FString& WorkflowName, const FString& ParameterName) const;
 
     // ========== 便捷接口 ==========
     
-    /** 检查工作流是否存在 */
-    UFUNCTION(BlueprintCallable, Category = "ComfyUI|Workflow")
-    bool IsWorkflowValid(const FString& WorkflowName) const;
-    
-    /** 获取工作流描述 - C++专用 */
-    FString GetWorkflowDescription(const FString& WorkflowName) const;
-    
-    /** 获取工作流类型 - C++专用 */
-    FString GetWorkflowType(const FString& WorkflowName) const;
-    
-    /** 确定工作流类型 - C++专用 */
+    /** 确定工作流类型 */
     EComfyUIWorkflowType DetectWorkflowType(const FString &WorkflowName);
 private:
     /** 工作流管理器实例 */
+    UPROPERTY()
     TObjectPtr<UComfyUIWorkflowManager> WorkflowManager;
 
 private:

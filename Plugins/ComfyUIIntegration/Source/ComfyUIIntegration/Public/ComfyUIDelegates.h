@@ -13,4 +13,4 @@ DECLARE_DELEGATE_TwoParams(FOnGenerationFailed, const FComfyUIError& /* Error */
 DECLARE_DELEGATE(FOnGenerationCompleted)
 
 DECLARE_DELEGATE_OneParam(FOnImageGenerated, UTexture2D* /* Output */)
-DECLARE_DELEGATE_OneParam(FOnMeshGenerated, UStaticMesh*)
+DECLARE_DELEGATE_ThreeParams(FOnMeshGenerated, UStaticMesh* /* Mesh */, const TArray<uint8>& /* OriginalData */, const FString& /* OriginalFormat */)

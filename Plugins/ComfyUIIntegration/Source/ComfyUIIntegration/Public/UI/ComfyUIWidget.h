@@ -33,15 +33,19 @@ public:
 
 private:
     /** 当前选择的工作流类型 */
+    UPROPERTY()
     TSharedPtr<EComfyUIWorkflowType> CurrentWorkflowType;
     
     /** 工作流类型选项 */
+    UPROPERTY()
     TArray<TSharedPtr<EComfyUIWorkflowType>> WorkflowOptions;
     
     /** 自定义工作流名称列表 */
+    UPROPERTY()
     TArray<TSharedPtr<FString>> CustomWorkflowNames;
     
     /** 当前选择的自定义工作流 */
+    UPROPERTY()
     TSharedPtr<FString> CurrentCustomWorkflow;
     
     /** 检测到的自定义工作流类型 */
@@ -54,7 +58,9 @@ private:
     FComfyUIProgressInfo CurrentProgressInfo;
     
     /** 输入图像（用于图生图等工作流） */
+    UPROPERTY()
     UTexture2D* InputImage = nullptr;
+    UPROPERTY()
     TSharedPtr<FSlateBrush> InputImageBrush;
     
     /** 输入模型路径（用于纹理生成等工作流） */
@@ -65,48 +71,85 @@ private:
     UComfyUIClient* CurrentClient;
 
     /** UI组件 */
+    UPROPERTY()
     TSharedPtr<SMultiLineEditableTextBox> PromptTextBox;
+    UPROPERTY()
     TSharedPtr<SMultiLineEditableTextBox> NegativePromptTextBox;
+    UPROPERTY()
     TSharedPtr<SComboBox<TSharedPtr<EComfyUIWorkflowType>>> WorkflowTypeComboBox;
+    UPROPERTY()
     TSharedPtr<SComboBox<TSharedPtr<FString>>> CustomWorkflowComboBox;
+    UPROPERTY()
     TSharedPtr<SEditableTextBox> ComfyUIServerUrlTextBox;
+    UPROPERTY()
     TSharedPtr<SButton> GenerateButton;
+    UPROPERTY()
     TSharedPtr<SButton> SaveButton;
+    UPROPERTY()
     TSharedPtr<SButton> SaveAsButton;
+    UPROPERTY()
     TSharedPtr<SButton> ImportWorkflowButton;
+    UPROPERTY()
     TSharedPtr<SButton> RefreshWorkflowsButton;
+    UPROPERTY()
     TSharedPtr<SButton> PreviewButton;
+    UPROPERTY()
     TSharedPtr<SButton> CancelButton;
     
     /** 进度相关UI组件 */
+    UPROPERTY()
     TSharedPtr<SProgressBar> GenerationProgressBar;
+    UPROPERTY()
     TSharedPtr<class STextBlock> ProgressStatusText;
+    UPROPERTY()
     TSharedPtr<class STextBlock> QueuePositionText;
+    UPROPERTY()
     TSharedPtr<class STextBlock> CurrentNodeText;
     
     /** 工作流类型标注显示 */
+    UPROPERTY()
     TSharedPtr<class STextBlock> WorkflowTypeLabel;
     
     /** 输入图像相关UI组件 */
+    UPROPERTY()
     TSharedPtr<class SImage> InputImagePreview;
+    UPROPERTY()
     TSharedPtr<SImageDragDropWidget> InputImageDragDropWidget;
+    UPROPERTY()
     TSharedPtr<SButton> LoadImageButton;
+    UPROPERTY()
     TSharedPtr<SButton> ClearImageButton;
 
     /** 模型输入相关UI组件 */
+    UPROPERTY()
     TSharedPtr<SEditableTextBox> ModelPathTextBox;
+    UPROPERTY()
     TSharedPtr<SButton> LoadModelButton;
+    UPROPERTY()
     TSharedPtr<SButton> ClearModelButton;
 
     /** 生成的内容预览 */
+    UPROPERTY()
     TSharedPtr<class SImage> ImagePreview;
+    UPROPERTY()
     TSharedPtr<class SWidgetSwitcher> ContentSwitcher;
+    UPROPERTY()
     TSharedPtr<class SComfyUI3DPreviewViewport> ModelViewport;
+    UPROPERTY()
     TSharedPtr<class STextBlock> ModelPreviewWidget;
+    UPROPERTY()
     UTexture2D* GeneratedTexture;
+    UPROPERTY()
     UStaticMesh* GeneratedMesh;
     
+    /** 生成的3D模型原始数据（用于保存为原格式） */
+    UPROPERTY()
+    TArray<uint8> GeneratedMeshOriginalData;
+    UPROPERTY()
+    FString GeneratedMeshOriginalFormat; // "gltf", "glb", "obj", etc.
+    
     /** 当前图像的Slate画刷，保持引用避免被释放 */
+    UPROPERTY()
     TSharedPtr<FSlateBrush> CurrentImageBrush;
 
     /** 创建UI布局 */
@@ -182,7 +225,7 @@ private:
     
     /** 内容生成回调 */
     void OnImageGenerationComplete(UTexture2D* GeneratedImage);
-    void OnMeshGenerationComplete(UStaticMesh* InGeneratedMesh);
+    void OnMeshGenerationComplete(UStaticMesh* InGeneratedMesh, const TArray<uint8>& OriginalData, const FString& OriginalFormat);
     void OnGenerationProgressUpdate(const FComfyUIProgressInfo& ProgressInfo);
     void OnGenerationStarted(const FString& PromptId);
     void OnGenerationCompleted();
@@ -191,6 +234,7 @@ private:
     void SwitchToImagePreview();
     void SwitchToModelPreview();
     void ClearContentPreview();
+    void CleanupTransientMesh();
     
     /** 文件保存通知 */
     void ShowSaveSuccessNotification(const FString& AssetPath);

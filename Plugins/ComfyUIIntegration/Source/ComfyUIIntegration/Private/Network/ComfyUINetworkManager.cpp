@@ -177,10 +177,10 @@ void UComfyUINetworkManager::UploadModel(const FString& ServerUrl, const TArray<
 {
     if (!HttpModule) HttpModule = &FHttpModule::Get();
     
-    // 构建上传URL
+    // 使用通用的 /upload/image 端点，指定 type=input 将文件上传到 input 目录
     FString UploadUrl = ServerUrl;
     if (!UploadUrl.EndsWith(TEXT("/"))) UploadUrl += TEXT("/");
-    UploadUrl += TEXT("upload/model");
+    UploadUrl += TEXT("upload/image");
     
     TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Request = HttpModule->CreateRequest();
     Request->SetURL(UploadUrl);
@@ -195,6 +195,10 @@ void UComfyUINetworkManager::UploadModel(const FString& ServerUrl, const TArray<
     // 构建multipart内容
     TArray<uint8> FormData;
     
+    // 添加type字段，指定为input目录
+    FString TypeField = FString::Printf(TEXT("--%s\r\nContent-Disposition: form-data; name=\"type\"\r\n\r\ninput\r\n"), *Boundary);
+    FormData.Append((uint8*)TCHAR_TO_UTF8(*TypeField), TypeField.Len());
+    
     // 根据文件扩展名确定Content-Type
     FString ModelContentType = TEXT("application/octet-stream");
     if (FileName.EndsWith(TEXT(".glb")))
@@ -206,8 +210,8 @@ void UComfyUINetworkManager::UploadModel(const FString& ServerUrl, const TArray<
     else if (FileName.EndsWith(TEXT(".ply")))
         ModelContentType = TEXT("application/octet-stream");
     
-    // 添加文件字段
-    FString FileHeader = FString::Printf(TEXT("--%s\r\nContent-Disposition: form-data; name=\"model\"; filename=\"%s\"\r\nContent-Type: %s\r\n\r\n"), 
+    // 添加文件字段 - 注意使用"image"作为字段名（ComfyUI的通用上传字段）
+    FString FileHeader = FString::Printf(TEXT("--%s\r\nContent-Disposition: form-data; name=\"image\"; filename=\"%s\"\r\nContent-Type: %s\r\n\r\n"), 
                                         *Boundary, *FileName, *ModelContentType);
     FormData.Append((uint8*)TCHAR_TO_UTF8(*FileHeader), FileHeader.Len());
     FormData.Append(ModelData);

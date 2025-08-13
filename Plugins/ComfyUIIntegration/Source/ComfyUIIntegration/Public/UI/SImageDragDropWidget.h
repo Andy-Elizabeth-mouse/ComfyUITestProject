@@ -44,7 +44,7 @@ public:
     void SetImage(UTexture2D* InTexture);
     
     /** 获取当前图像 */
-    UTexture2D* GetImage() const { return CurrentTexture; }
+    UTexture2D* GetImage() const { return CurrentTexture.Get(); }
     
     /** 清除当前图像 */
     void ClearImage();
@@ -64,15 +64,19 @@ protected:
 
 private:
     /** 当前显示的纹理 */
-    UTexture2D* CurrentTexture = nullptr;
+    UPROPERTY()
+    TWeakObjectPtr<UTexture2D> CurrentTexture;
     
     /** 当前图像的Slate画刷 */
+    UPROPERTY()
     TSharedPtr<FSlateBrush> CurrentImageBrush;
     
     /** 预览图像的大小 */
+    UPROPERTY()
     FVector2D PreviewSize;
     
     /** 允许的资产类型 */
+    UPROPERTY()
     TArray<UClass*> AllowedClasses;
     
     /** 图像拖拽完成的回调 */
@@ -82,6 +86,7 @@ private:
     bool bIsDragHovering = false;
     
     /** 图像预览Widget */
+    UPROPERTY()
     TSharedPtr<class SImage> ImagePreview;
     
     /** 检查拖拽操作是否有效 */

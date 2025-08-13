@@ -42,13 +42,13 @@
   },
   "20": {
     "inputs": {
-      "view_size": 768,
+      "view_size": 512,
       "num_views": 10,
       "elevation": 3,
-      "texture_size": 1024,
+      "texture_size": 512,
       "do_rescale": false,
       "seed": 42,
-      "steps": 10,
+      "steps": 25,
       "guidance_scale": 7.5,
       "unwrap_mesh": true,
       "trimesh": ["45", 0],
@@ -70,7 +70,7 @@
     "inputs": {
       "image": ["14", 2],
       "model": "hunyuan3d-dit-v2-1-fp16.ckpt",
-      "steps": 25,
+      "steps": 35,
       "guidance_scale": 7.5,
       "seed": 42,
       "attention_mode": "sdpa"
@@ -99,7 +99,7 @@
   },
   "49": {
     "inputs": {
-      "output_mesh_name": "{OUTPUT_FILENAME_PREFIX}",
+      "output_mesh_name": "Generated3DModel",
       "pipeline": ["21", 0],
       "albedo": ["21", 1],
       "albedo_mask": ["21", 2],
